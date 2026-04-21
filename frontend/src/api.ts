@@ -1,6 +1,6 @@
 import type { Floor, Team, Scenario } from "./types";
 
-const BASE = "/api";
+const BASE = "";
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

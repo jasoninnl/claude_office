@@ -1,7 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, selectinload
 from typing import List
+import os
 
 from database import engine, get_db
 from models import Base, Floor, Team, Scenario, Allocation
@@ -24,6 +27,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
 
 # ── Floors ──────────────────────────────────────────────────────────────────
@@ -335,3 +340,13 @@ def _rescore_scenario(db: Session, scenario_id: int):
     scenario.score = score
     scenario.score_breakdown = breakdown
     db.commit()
+
+
+# ── Serve React frontend ──────────────────────────────────────────────────────
+
+if os.path.isdir(STATIC_DIR):
+    app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_spa(full_path: str):
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
