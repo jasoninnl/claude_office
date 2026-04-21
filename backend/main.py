@@ -1,10 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, selectinload
 from typing import List
+from pathlib import Path
 import os
+import uuid
 
 from database import engine, get_db
 from models import Base, Floor, Team, Scenario, Allocation
@@ -12,11 +14,14 @@ from schemas import (
     FloorCreate, FloorUpdate, FloorOut,
     TeamCreate, TeamUpdate, TeamOut,
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
-    AllocationItem, OptimizeRequest,
+    AllocationItem, AllocationOut, AllocationPositionUpdate, OptimizeRequest,
 )
 from optimizer import simulated_annealing, score_allocation
 
 Base.metadata.create_all(bind=engine)
+
+UPLOAD_DIR = Path(__file__).parent / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Office Staff Allocation Optimizer")
 
@@ -27,6 +32,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
@@ -67,6 +74,48 @@ def delete_floor(floor_id: int, db: Session = Depends(get_db)):
     db.delete(floor)
     db.commit()
     return {"ok": True}
+
+
+@app.post("/floors/{floor_id}/image", response_model=FloorOut)
+async def upload_floor_image(
+    floor_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(404, "Floor not found")
+    suffix = Path(file.filename).suffix.lower() if file.filename else ".png"
+    if suffix not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"}:
+        raise HTTPException(400, "Unsupported image format")
+    filename = f"floor_{floor_id}_{uuid.uuid4().hex[:8]}{suffix}"
+    dest = UPLOAD_DIR / filename
+    content = await file.read()
+    dest.write_bytes(content)
+    # Remove old image if present
+    if floor.image_path:
+        old = UPLOAD_DIR / Path(floor.image_path).name
+        if old.exists():
+            old.unlink()
+    floor.image_path = f"/uploads/{filename}"
+    db.commit()
+    db.refresh(floor)
+    return floor
+
+
+@app.delete("/floors/{floor_id}/image", response_model=FloorOut)
+def delete_floor_image(floor_id: int, db: Session = Depends(get_db)):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(404, "Floor not found")
+    if floor.image_path:
+        old = UPLOAD_DIR / Path(floor.image_path).name
+        if old.exists():
+            old.unlink()
+    floor.image_path = None
+    db.commit()
+    db.refresh(floor)
+    return floor
 
 
 # ── Teams ────────────────────────────────────────────────────────────────────
@@ -161,6 +210,10 @@ def create_scenario(body: ScenarioCreate, db: Session = Depends(get_db)):
             team_id=item.team_id,
             floor_id=item.floor_id,
             desks_used=item.desks_used,
+            pos_x=item.pos_x,
+            pos_y=item.pos_y,
+            pos_w=item.pos_w,
+            pos_h=item.pos_h,
         )
         db.add(alloc)
     db.commit()
@@ -187,6 +240,10 @@ def update_scenario(scenario_id: int, body: ScenarioUpdate, db: Session = Depend
             team_id=item.team_id,
             floor_id=item.floor_id,
             desks_used=item.desks_used,
+            pos_x=item.pos_x,
+            pos_y=item.pos_y,
+            pos_w=item.pos_w,
+            pos_h=item.pos_h,
         )
         db.add(alloc)
     db.commit()
@@ -287,6 +344,29 @@ def run_optimizer(body: OptimizeRequest, db: Session = Depends(get_db)):
     db.commit()
 
     return _load_scenario(db, scenario.id)
+
+
+@app.patch("/allocations/{allocation_id}/position", response_model=AllocationOut)
+def update_allocation_position(
+    allocation_id: int,
+    body: AllocationPositionUpdate,
+    db: Session = Depends(get_db),
+):
+    alloc = (
+        db.query(Allocation)
+        .options(selectinload(Allocation.team), selectinload(Allocation.floor))
+        .filter(Allocation.id == allocation_id)
+        .first()
+    )
+    if not alloc:
+        raise HTTPException(404, "Allocation not found")
+    alloc.pos_x = body.pos_x
+    alloc.pos_y = body.pos_y
+    alloc.pos_w = body.pos_w
+    alloc.pos_h = body.pos_h
+    db.commit()
+    db.refresh(alloc)
+    return alloc
 
 
 @app.post("/scenarios/{scenario_id}/score")

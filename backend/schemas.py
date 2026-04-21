@@ -27,6 +27,7 @@ class FloorUpdate(FloorBase):
 
 class FloorOut(FloorBase):
     id: int
+    image_path: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -68,6 +69,10 @@ class AllocationItem(BaseModel):
     team_id: int
     floor_id: int
     desks_used: int = 0
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
+    pos_w: Optional[float] = None
+    pos_h: Optional[float] = None
 
 
 class AllocationOut(BaseModel):
@@ -75,11 +80,22 @@ class AllocationOut(BaseModel):
     team_id: int
     floor_id: int
     desks_used: int
+    pos_x: Optional[float] = None
+    pos_y: Optional[float] = None
+    pos_w: Optional[float] = None
+    pos_h: Optional[float] = None
     team: TeamOut
     floor: FloorOut
 
     class Config:
         from_attributes = True
+
+
+class AllocationPositionUpdate(BaseModel):
+    pos_x: float
+    pos_y: float
+    pos_w: float
+    pos_h: float
 
 
 # --- Scenario ---

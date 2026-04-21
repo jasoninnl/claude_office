@@ -9,13 +9,14 @@ interface Props {
   scenarios: Scenario[];
   floors: Floor[];
   teams: Team[];
+  activeScenarioId: number | null;
+  onActiveScenarioChange: (id: number | null) => void;
   onScenarioChange: () => void;
 }
 
-export default function ScenarioManager({ scenarios, floors, teams, onScenarioChange }: Props) {
-  const [activeScenario, setActiveScenario] = useState<number | null>(
-    scenarios.find((s) => s.is_baseline)?.id ?? scenarios[0]?.id ?? null
-  );
+export default function ScenarioManager({ scenarios, floors, teams, activeScenarioId, onActiveScenarioChange, onScenarioChange }: Props) {
+  const activeScenario = activeScenarioId;
+  const setActiveScenario = onActiveScenarioChange;
   const [showOptimizer, setShowOptimizer] = useState(false);
   const [editingName, setEditingName] = useState<number | null>(null);
   const [nameInput, setNameInput] = useState("");

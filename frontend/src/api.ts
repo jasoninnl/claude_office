@@ -1,4 +1,4 @@
-import type { Floor, Team, Scenario } from "./types";
+import type { Floor, Team, Scenario, Allocation } from "./types";
 
 const BASE = "";
 
@@ -23,6 +23,16 @@ export const updateFloor = (id: number, data: Omit<Floor, "id">) =>
 export const deleteFloor = (id: number) =>
   req<void>(`/floors/${id}`, { method: "DELETE" });
 
+export const uploadFloorImage = (floorId: number, file: File): Promise<Floor> => {
+  const form = new FormData();
+  form.append("file", file);
+  return fetch(`/floors/${floorId}/image`, { method: "POST", body: form })
+    .then((r) => r.json());
+};
+
+export const deleteFloorImage = (floorId: number) =>
+  req<Floor>(`/floors/${floorId}/image`, { method: "DELETE" });
+
 // Teams
 export const getTeams = () => req<Team[]>("/teams");
 export const createTeam = (data: Omit<Team, "id">) =>
@@ -35,31 +45,32 @@ export const deleteTeam = (id: number) =>
 // Scenarios
 export const getScenarios = () => req<Scenario[]>("/scenarios");
 export const getScenario = (id: number) => req<Scenario>(`/scenarios/${id}`);
+
+type AllocItem = {
+  team_id: number; floor_id: number; desks_used: number;
+  pos_x?: number | null; pos_y?: number | null;
+  pos_w?: number | null; pos_h?: number | null;
+};
 export const createScenario = (data: {
-  name: string;
-  description: string;
-  is_baseline: boolean;
-  allocations: { team_id: number; floor_id: number; desks_used: number }[];
+  name: string; description: string; is_baseline: boolean; allocations: AllocItem[];
 }) => req<Scenario>("/scenarios", { method: "POST", body: JSON.stringify(data) });
-export const updateScenario = (
-  id: number,
-  data: {
-    name: string;
-    description: string;
-    is_baseline: boolean;
-    allocations: { team_id: number; floor_id: number; desks_used: number }[];
-  }
-) => req<Scenario>(`/scenarios/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const updateScenario = (id: number, data: {
+  name: string; description: string; is_baseline: boolean; allocations: AllocItem[];
+}) => req<Scenario>(`/scenarios/${id}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteScenario = (id: number) =>
   req<void>(`/scenarios/${id}`, { method: "DELETE" });
 export const duplicateScenario = (id: number) =>
   req<Scenario>(`/scenarios/${id}/duplicate`, { method: "POST" });
 
+// Allocation positions
+export const updateAllocationPosition = (
+  allocId: number,
+  pos: { pos_x: number; pos_y: number; pos_w: number; pos_h: number }
+) => req<Allocation>(`/allocations/${allocId}/position`, { method: "PATCH", body: JSON.stringify(pos) });
+
 // Optimizer
 export const runOptimizer = (data: {
-  scenario_name: string;
-  description: string;
-  weights: Record<string, number>;
+  scenario_name: string; description: string; weights: Record<string, number>;
 }) => req<Scenario>("/optimize", { method: "POST", body: JSON.stringify(data) });
 
 export const rescoreScenario = (id: number) =>

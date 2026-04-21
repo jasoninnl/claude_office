@@ -11,6 +11,7 @@ export interface Floor {
   meeting_rooms: MeetingRoom[];
   amenities: string[];
   notes: string;
+  image_path: string | null;
 }
 
 export interface Team {
@@ -34,6 +35,10 @@ export interface Allocation {
   team_id: number;
   floor_id: number;
   desks_used: number;
+  pos_x: number | null;
+  pos_y: number | null;
+  pos_w: number | null;
+  pos_h: number | null;
   team: Team;
   floor: Floor;
 }
@@ -59,4 +64,4 @@ export interface Scenario {
   allocations: Allocation[];
 }
 
-export type Tab = "scenarios" | "floors" | "teams" | "compare";
+export type Tab = "scenarios" | "floorplan" | "floors" | "teams" | "compare";
