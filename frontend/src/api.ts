@@ -1,4 +1,4 @@
-import type { Floor, Team, Scenario, Allocation } from "./types";
+import type { Floor, Team, Scenario, Allocation, FloorElement, PDFParseResult } from "./types";
 
 const BASE = "";
 
@@ -14,7 +14,7 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json();
 }
 
-// Floors
+// ── Floors ───────────────────────────────────────────────────────────────────
 export const getFloors = () => req<Floor[]>("/floors");
 export const createFloor = (data: Omit<Floor, "id">) =>
   req<Floor>("/floors", { method: "POST", body: JSON.stringify(data) });
@@ -26,14 +26,60 @@ export const deleteFloor = (id: number) =>
 export const uploadFloorImage = (floorId: number, file: File): Promise<Floor> => {
   const form = new FormData();
   form.append("file", file);
-  return fetch(`/floors/${floorId}/image`, { method: "POST", body: form })
-    .then((r) => r.json());
+  return fetch(`/floors/${floorId}/image`, { method: "POST", body: form }).then((r) => r.json());
 };
-
 export const deleteFloorImage = (floorId: number) =>
   req<Floor>(`/floors/${floorId}/image`, { method: "DELETE" });
 
-// Teams
+// ── PDF processing ────────────────────────────────────────────────────────────
+export const uploadFloorPdf = (floorId: number, file: File): Promise<PDFParseResult> => {
+  const form = new FormData();
+  form.append("file", file);
+  return fetch(`/floors/${floorId}/pdf`, { method: "POST", body: form }).then(async (r) => {
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || "Upload failed");
+    }
+    return r.json();
+  });
+};
+export const deleteFloorPdf = (floorId: number) =>
+  req<Floor>(`/floors/${floorId}/pdf`, { method: "DELETE" });
+
+// ── Floor elements ────────────────────────────────────────────────────────────
+export const getFloorElements = (floorId: number) =>
+  req<FloorElement[]>(`/floors/${floorId}/elements`);
+
+export const addFloorElement = (
+  floorId: number,
+  data: { element_type: string; nx: number; ny: number; nw?: number; nh?: number; label?: string }
+) => req<FloorElement>(`/floors/${floorId}/elements`, { method: "POST", body: JSON.stringify(data) });
+
+export const patchFloorElement = (
+  elementId: number,
+  data: { element_type?: string; team_id?: number | null; is_lead_office?: boolean; label?: string }
+) => req<FloorElement>(`/floor-elements/${elementId}`, { method: "PATCH", body: JSON.stringify(data) });
+
+export const deleteFloorElement = (elementId: number) =>
+  req<void>(`/floor-elements/${elementId}`, { method: "DELETE" });
+
+export const bulkAssignElements = (
+  floorId: number,
+  elementIds: number[],
+  teamId: number | null
+) =>
+  req<FloorElement[]>(`/floors/${floorId}/elements/bulk-assign`, {
+    method: "POST",
+    body: JSON.stringify({ team_id: teamId, element_ids: elementIds }),
+  });
+
+export const autoAssignFloor = (floorId: number, scenarioId: number) =>
+  req<FloorElement[]>(`/floors/${floorId}/auto-assign`, {
+    method: "POST",
+    body: JSON.stringify({ scenario_id: scenarioId }),
+  });
+
+// ── Teams ─────────────────────────────────────────────────────────────────────
 export const getTeams = () => req<Team[]>("/teams");
 export const createTeam = (data: Omit<Team, "id">) =>
   req<Team>("/teams", { method: "POST", body: JSON.stringify(data) });
@@ -42,7 +88,7 @@ export const updateTeam = (id: number, data: Omit<Team, "id">) =>
 export const deleteTeam = (id: number) =>
   req<void>(`/teams/${id}`, { method: "DELETE" });
 
-// Scenarios
+// ── Scenarios ─────────────────────────────────────────────────────────────────
 export const getScenarios = () => req<Scenario[]>("/scenarios");
 export const getScenario = (id: number) => req<Scenario>(`/scenarios/${id}`);
 
@@ -62,13 +108,12 @@ export const deleteScenario = (id: number) =>
 export const duplicateScenario = (id: number) =>
   req<Scenario>(`/scenarios/${id}/duplicate`, { method: "POST" });
 
-// Allocation positions
 export const updateAllocationPosition = (
   allocId: number,
   pos: { pos_x: number; pos_y: number; pos_w: number; pos_h: number }
 ) => req<Allocation>(`/allocations/${allocId}/position`, { method: "PATCH", body: JSON.stringify(pos) });
 
-// Optimizer
+// ── Optimizer ─────────────────────────────────────────────────────────────────
 export const runOptimizer = (data: {
   scenario_name: string; description: string; weights: Record<string, number>;
 }) => req<Scenario>("/optimize", { method: "POST", body: JSON.stringify(data) });

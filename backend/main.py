@@ -3,18 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, selectinload
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import os
 import uuid
 
 from database import engine, get_db
-from models import Base, Floor, Team, Scenario, Allocation
+from models import Base, Floor, Team, Scenario, Allocation, FloorElement
 from schemas import (
     FloorCreate, FloorUpdate, FloorOut,
     TeamCreate, TeamUpdate, TeamOut,
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
     AllocationItem, AllocationOut, AllocationPositionUpdate, OptimizeRequest,
+    FloorElementOut, FloorElementPatch, FloorElementCreate,
+    BulkAssignRequest, AutoAssignRequest, PDFParseResult,
 )
 from optimizer import simulated_annealing, score_allocation
 
@@ -116,6 +118,222 @@ def delete_floor_image(floor_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(floor)
     return floor
+
+
+# ── PDF Upload & Element Detection ──────────────────────────────────────────
+
+@app.post("/floors/{floor_id}/pdf", response_model=PDFParseResult)
+async def upload_floor_pdf(
+    floor_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(404, "Floor not found")
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Only PDF files are accepted")
+
+    try:
+        from pdf_parser import process_pdf
+    except ImportError:
+        raise HTTPException(500, "PyMuPDF is not installed. Run: pip install pymupdf")
+
+    # Save PDF
+    pdf_name = f"floor_{floor_id}_{uuid.uuid4().hex[:8]}.pdf"
+    pdf_dest = UPLOAD_DIR / pdf_name
+    content = await file.read()
+    pdf_dest.write_bytes(content)
+
+    # Remove old PDF and PNG
+    for old_path in [floor.pdf_path, floor.image_path]:
+        if old_path:
+            old = UPLOAD_DIR / Path(old_path).name
+            if old.exists():
+                old.unlink()
+
+    result = process_pdf(pdf_dest)
+
+    # Save rasterised PNG as the floor image
+    img_name = f"floor_{floor_id}_{uuid.uuid4().hex[:8]}.png"
+    img_dest = UPLOAD_DIR / img_name
+    img_dest.write_bytes(result["image_bytes"])
+
+    floor.pdf_path = f"/uploads/{pdf_name}"
+    floor.image_path = f"/uploads/{img_name}"
+    floor.pdf_page_width = result["pdf_page_width"]
+    floor.pdf_page_height = result["pdf_page_height"]
+
+    # Replace all existing elements
+    db.query(FloorElement).filter(FloorElement.floor_id == floor_id).delete()
+    for el in result["elements"]:
+        db.add(FloorElement(
+            floor_id=floor_id,
+            element_type=el["element_type"],
+            x=el["x"], y=el["y"], w=el["w"], h=el["h"],
+            nx=el["nx"], ny=el["ny"], nw=el["nw"], nh=el["nh"],
+            label=el["label"],
+            confidence=el["confidence"],
+        ))
+
+    db.commit()
+    return PDFParseResult(
+        desk_count=result["desk_count"],
+        office_count=result["office_count"],
+        warnings=result["warnings"],
+    )
+
+
+@app.delete("/floors/{floor_id}/pdf", response_model=FloorOut)
+def delete_floor_pdf(floor_id: int, db: Session = Depends(get_db)):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(404, "Floor not found")
+    for path in [floor.pdf_path, floor.image_path]:
+        if path:
+            p = UPLOAD_DIR / Path(path).name
+            if p.exists():
+                p.unlink()
+    floor.pdf_path = None
+    floor.image_path = None
+    floor.pdf_page_width = None
+    floor.pdf_page_height = None
+    db.query(FloorElement).filter(FloorElement.floor_id == floor_id).delete()
+    db.commit()
+    db.refresh(floor)
+    return floor
+
+
+# ── Floor Elements CRUD ──────────────────────────────────────────────────────
+
+@app.get("/floors/{floor_id}/elements", response_model=List[FloorElementOut])
+def list_elements(
+    floor_id: int,
+    element_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(FloorElement).options(
+        selectinload(FloorElement.team)
+    ).filter(FloorElement.floor_id == floor_id)
+    if element_type:
+        q = q.filter(FloorElement.element_type == element_type)
+    return q.order_by(FloorElement.y, FloorElement.x).all()
+
+
+@app.post("/floors/{floor_id}/elements", response_model=FloorElementOut)
+def add_element(
+    floor_id: int,
+    body: FloorElementCreate,
+    db: Session = Depends(get_db),
+):
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        raise HTTPException(404, "Floor not found")
+    pw = floor.pdf_page_width or 841
+    ph = floor.pdf_page_height or 595
+    el = FloorElement(
+        floor_id=floor_id,
+        element_type=body.element_type,
+        nx=body.nx, ny=body.ny, nw=body.nw, nh=body.nh,
+        x=body.nx * pw, y=body.ny * ph,
+        w=body.nw * pw, h=body.nh * ph,
+        label=body.label,
+        confidence=1.0,
+    )
+    db.add(el)
+    db.commit()
+    db.refresh(el)
+    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == el.id).first()
+
+
+@app.patch("/floor-elements/{element_id}", response_model=FloorElementOut)
+def patch_element(
+    element_id: int,
+    body: FloorElementPatch,
+    db: Session = Depends(get_db),
+):
+    el = db.get(FloorElement, element_id)
+    if not el:
+        raise HTTPException(404, "Element not found")
+    if body.element_type is not None:
+        el.element_type = body.element_type
+    if body.team_id is not None:
+        el.team_id = body.team_id
+    elif "team_id" in body.model_fields_set:
+        el.team_id = None
+    if body.is_lead_office is not None:
+        el.is_lead_office = body.is_lead_office
+    if body.label is not None:
+        el.label = body.label
+    db.commit()
+    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == element_id).first()
+
+
+@app.delete("/floor-elements/{element_id}")
+def delete_element(element_id: int, db: Session = Depends(get_db)):
+    el = db.get(FloorElement, element_id)
+    if not el:
+        raise HTTPException(404, "Element not found")
+    db.delete(el)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/floors/{floor_id}/elements/bulk-assign", response_model=List[FloorElementOut])
+def bulk_assign(
+    floor_id: int,
+    body: BulkAssignRequest,
+    db: Session = Depends(get_db),
+):
+    elements = db.query(FloorElement).filter(
+        FloorElement.floor_id == floor_id,
+        FloorElement.id.in_(body.element_ids),
+    ).all()
+    for el in elements:
+        el.team_id = body.team_id
+        if body.team_id is None:
+            el.is_lead_office = False
+    db.commit()
+    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
+        FloorElement.id.in_(body.element_ids)
+    ).all()
+
+
+@app.post("/floors/{floor_id}/auto-assign", response_model=List[FloorElementOut])
+def auto_assign_floor(
+    floor_id: int,
+    body: AutoAssignRequest,
+    db: Session = Depends(get_db),
+):
+    from pdf_parser import auto_assign
+
+    allocs = (
+        db.query(Allocation)
+        .options(selectinload(Allocation.team))
+        .filter(
+            Allocation.floor_id == floor_id,
+            Allocation.scenario_id == body.scenario_id,
+        )
+        .all()
+    )
+    if not allocs:
+        raise HTTPException(400, "No teams are allocated to this floor in the selected scenario")
+
+    desks = db.query(FloorElement).filter(
+        FloorElement.floor_id == floor_id,
+        FloorElement.element_type == "desk",
+    ).all()
+    offices = db.query(FloorElement).filter(
+        FloorElement.floor_id == floor_id,
+        FloorElement.element_type == "office",
+    ).all()
+
+    auto_assign(desks, offices, allocs)
+    db.commit()
+
+    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
+        FloorElement.floor_id == floor_id
+    ).order_by(FloorElement.y, FloorElement.x).all()
 
 
 # ── Teams ────────────────────────────────────────────────────────────────────

@@ -14,6 +14,9 @@ const emptyFloor = (): Omit<Floor, "id"> => ({
   total_desks: 60,
   meeting_rooms: [],
   image_path: null,
+  pdf_path: null,
+  pdf_page_width: null,
+  pdf_page_height: null,
   amenities: [],
   notes: "",
 });

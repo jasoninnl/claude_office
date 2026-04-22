@@ -27,6 +27,8 @@ const emptyTeam = (): Omit<Team, "id"> => ({
   must_separate_from: [],
   floor_preference: null,
   notes: "",
+  has_team_lead: false,
+  team_lead_name: "",
 });
 
 export default function TeamManager({ teams, onTeamChange }: Props) {
@@ -132,6 +134,11 @@ export default function TeamManager({ teams, onTeamChange }: Props) {
                       <span className="flex items-center gap-1">
                         <Users size={12} /> {team.headcount} people
                       </span>
+                      {team.has_team_lead && (
+                        <span className="flex items-center gap-1 text-amber-400">
+                          👑 {team.team_lead_name || "Team Lead"}
+                        </span>
+                      )}
                       {team.meeting_rooms_needed > 0 && (
                         <span>{team.meeting_rooms_needed} meeting room(s)</span>
                       )}
@@ -320,6 +327,27 @@ function TeamForm({ form, setForm, teams, editingId, toggleRelation, onSave, onC
           </div>
         </div>
       )}
+
+      {/* Team Lead */}
+      <div className="border border-amber-800 rounded-lg p-3 bg-amber-950/30">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            className="rounded"
+            checked={form.has_team_lead}
+            onChange={(e) => setForm((f) => ({ ...f, has_team_lead: e.target.checked }))}
+          />
+          <span className="text-sm text-amber-400 font-medium">👑 Has a Team Lead (requires private office)</span>
+        </label>
+        {form.has_team_lead && (
+          <input
+            className="mt-2 w-full bg-gray-800 border border-amber-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500"
+            value={form.team_lead_name}
+            onChange={(e) => setForm((f) => ({ ...f, team_lead_name: e.target.value }))}
+            placeholder="Team lead name (optional)"
+          />
+        )}
+      </div>
 
       {/* Notes */}
       <div>

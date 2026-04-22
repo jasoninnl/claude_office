@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
-import { Upload, X, ImageIcon, Building2 } from "lucide-react";
-import type { Scenario, Floor, Team } from "../types";
+import { useRef, useState, useEffect, useCallback } from "react";
+import { Upload, X, ImageIcon, Building2, FileText, Wand2, MousePointer, Square, DoorOpen } from "lucide-react";
+import type { Scenario, Floor, Team, FloorElement, PDFParseResult } from "../types";
 import * as api from "../api";
 import FloorPlanCanvas from "./FloorPlanCanvas";
+import PdfFloorPlanCanvas from "./PdfFloorPlanCanvas";
 
 interface Props {
   scenario: Scenario | null;
@@ -17,11 +18,37 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     floors.length > 0 ? floors.sort((a, b) => b.level - a.level)[0].id : null
   );
   const [uploading, setUploading] = useState<number | null>(null);
+  const [uploadingPdf, setUploadingPdf] = useState<number | null>(null);
+  const [elements, setElements] = useState<FloorElement[]>([]);
+  const [loadingElements, setLoadingElements] = useState(false);
+  const [pdfResult, setPdfResult] = useState<PDFParseResult | null>(null);
+  const [drawMode, setDrawMode] = useState<"none" | "desk" | "office">("none");
+  const [autoAssigning, setAutoAssigning] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const uploadingForFloor = useRef<number | null>(null);
 
   const sortedFloors = [...floors].sort((a, b) => b.level - a.level);
   const activeFloor = floors.find((f) => f.id === activeFloorId) ?? sortedFloors[0] ?? null;
+
+  const loadElements = useCallback(async (floorId: number) => {
+    setLoadingElements(true);
+    try {
+      const data = await api.getFloorElements(floorId);
+      setElements(data);
+    } finally {
+      setLoadingElements(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeFloor?.pdf_path) {
+      loadElements(activeFloor.id);
+    } else {
+      setElements([]);
+    }
+  }, [activeFloor?.id, activeFloor?.pdf_path, loadElements]);
 
   const allocationsForFloor = (floorId: number) =>
     scenario?.allocations.filter((a) => a.floor_id === floorId) ?? [];
@@ -50,6 +77,46 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     onFloorChange();
   };
 
+  const handlePdfUploadClick = (floorId: number) => {
+    uploadingForFloor.current = floorId;
+    pdfInputRef.current?.click();
+  };
+
+  const handlePdfChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const floorId = uploadingForFloor.current;
+    if (!file || !floorId) return;
+    e.target.value = "";
+    setUploadingPdf(floorId);
+    setPdfResult(null);
+    try {
+      const result = await api.uploadFloorPdf(floorId, file);
+      setPdfResult(result);
+      onFloorChange();
+    } finally {
+      setUploadingPdf(null);
+    }
+  };
+
+  const handleRemovePdf = async (floorId: number) => {
+    await api.deleteFloorPdf(floorId);
+    setElements([]);
+    setPdfResult(null);
+    onFloorChange();
+  };
+
+  const handleAutoAssign = async () => {
+    if (!activeFloor || !scenario) return;
+    setAutoAssigning(true);
+    try {
+      await api.autoAssignFloor(activeFloor.id, scenario.id);
+      await loadElements(activeFloor.id);
+      onScenarioChange();
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
+
   if (!scenario) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-500">
@@ -58,15 +125,12 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     );
   }
 
+  const hasPdf = !!(activeFloor?.pdf_path);
+
   return (
     <div className="space-y-4">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileChange}
-      />
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+      <input ref={pdfInputRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfChange} />
 
       {/* Floor selector */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -94,7 +158,8 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
               }`}>
                 {utilPct}%
               </span>
-              {floor.image_path && <ImageIcon size={11} className="opacity-60" />}
+              {floor.pdf_path && <FileText size={11} className="opacity-60" />}
+              {floor.image_path && !floor.pdf_path && <ImageIcon size={11} className="opacity-60" />}
             </button>
           );
         })}
@@ -104,49 +169,136 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
       {activeFloor && (
         <div className="bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
           {/* Floor header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 flex-wrap gap-2">
             <div>
               <h3 className="font-semibold text-white">{activeFloor.name}</h3>
               <p className="text-xs text-gray-500">
                 {scenario.name} · {allocationsForFloor(activeFloor.id).length} teams allocated
+                {hasPdf && elements.length > 0 && (
+                  <> · {elements.filter((e) => e.element_type === "desk").length} desks,{" "}
+                  {elements.filter((e) => e.element_type === "office").length} offices detected</>
+                )}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              {activeFloor.image_path ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              {hasPdf ? (
                 <button
-                  onClick={() => handleRemoveImage(activeFloor.id)}
+                  onClick={() => handleRemovePdf(activeFloor.id)}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
                 >
-                  <X size={12} /> Remove image
+                  <X size={12} /> Remove PDF
                 </button>
-              ) : null}
-              <button
-                onClick={() => handleUploadClick(activeFloor.id)}
-                disabled={uploading === activeFloor.id}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {uploading === activeFloor.id ? (
-                  <span className="animate-spin">⟳</span>
-                ) : (
-                  <Upload size={12} />
-                )}
-                {activeFloor.image_path ? "Replace floor plan" : "Upload floor plan"}
-              </button>
+              ) : (
+                <button
+                  onClick={() => handlePdfUploadClick(activeFloor.id)}
+                  disabled={uploadingPdf === activeFloor.id}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-purple-700 hover:bg-purple-600 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {uploadingPdf === activeFloor.id ? <span className="animate-spin">⟳</span> : <FileText size={12} />}
+                  Upload PDF floor plan
+                </button>
+              )}
+              {!hasPdf && (
+                <>
+                  {activeFloor.image_path && (
+                    <button
+                      onClick={() => handleRemoveImage(activeFloor.id)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+                    >
+                      <X size={12} /> Remove image
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleUploadClick(activeFloor.id)}
+                    disabled={uploading === activeFloor.id}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {uploading === activeFloor.id ? <span className="animate-spin">⟳</span> : <Upload size={12} />}
+                    {activeFloor.image_path ? "Replace floor plan" : "Upload floor plan"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
+          {/* PDF toolbar */}
+          {hasPdf && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-gray-950 border-b border-gray-800 flex-wrap">
+              <span className="text-xs text-gray-500">Draw:</span>
+              <button
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${drawMode === "none" ? "bg-indigo-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                onClick={() => setDrawMode("none")}
+              >
+                <MousePointer size={11} /> Select
+              </button>
+              <button
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${drawMode === "desk" ? "bg-emerald-700 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                onClick={() => setDrawMode(drawMode === "desk" ? "none" : "desk")}
+              >
+                <Square size={11} /> Place Desk
+              </button>
+              <button
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${drawMode === "office" ? "bg-amber-700 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                onClick={() => setDrawMode(drawMode === "office" ? "none" : "office")}
+              >
+                <DoorOpen size={11} /> Place Office
+              </button>
+              <div className="flex-1" />
+              <button
+                onClick={handleAutoAssign}
+                disabled={autoAssigning || elements.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {autoAssigning ? <span className="animate-spin">⟳</span> : <Wand2 size={12} />}
+                Auto-assign teams
+              </button>
+            </div>
+          )}
+
+          {/* PDF parse result */}
+          {pdfResult && pdfResult.warnings.length > 0 && (
+            <div className="px-4 py-2 bg-amber-950 border-b border-amber-800">
+              <p className="text-xs font-medium text-amber-400 mb-1">PDF parse warnings:</p>
+              {pdfResult.warnings.map((w, i) => (
+                <p key={i} className="text-xs text-amber-300">• {w}</p>
+              ))}
+            </div>
+          )}
+          {pdfResult && (
+            <div className="px-4 py-2 bg-gray-950 border-b border-gray-800 text-xs text-gray-500">
+              Detected: {pdfResult.desk_count} desks, {pdfResult.office_count} offices
+            </div>
+          )}
+
           {/* Canvas */}
           <div className="p-4">
-            <FloorPlanCanvas
-              floor={activeFloor}
-              allocations={allocationsForFloor(activeFloor.id)}
-              onPositionsSaved={onScenarioChange}
-            />
+            {hasPdf ? (
+              loadingElements ? (
+                <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
+                  Loading floor elements…
+                </div>
+              ) : (
+                <PdfFloorPlanCanvas
+                  floor={activeFloor}
+                  elements={elements}
+                  teams={teams}
+                  drawMode={drawMode}
+                  onDrawModeChange={setDrawMode}
+                  onElementsChange={() => loadElements(activeFloor.id)}
+                />
+              )
+            ) : (
+              <FloorPlanCanvas
+                floor={activeFloor}
+                allocations={allocationsForFloor(activeFloor.id)}
+                onPositionsSaved={onScenarioChange}
+              />
+            )}
           </div>
         </div>
       )}
 
-      {/* All floors mini-grid (overview) */}
+      {/* All floors mini-grid overview */}
       {sortedFloors.length > 1 && (
         <div>
           <p className="text-xs text-gray-500 mb-2">All floors overview</p>
@@ -165,7 +317,6 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                     isActive ? "border-indigo-500 ring-1 ring-indigo-500" : "border-gray-700"
                   }`}
                 >
-                  {/* Mini floor plan preview */}
                   <div className="relative" style={{ paddingBottom: "56.25%" }}>
                     <div className="absolute inset-0 bg-gray-950">
                       {floor.image_path ? (
@@ -177,7 +328,6 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                       ) : (
                         <MiniGridBg />
                       )}
-                      {/* Mini team blocks overlay */}
                       {allocs.slice(0, 6).map((alloc, i) => (
                         <div
                           key={alloc.team_id}

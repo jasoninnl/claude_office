@@ -1,10 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
-
-
-class MeetingRoom(BaseModel):
-    name: str
-    capacity: int
+from typing import Optional, List
 
 
 # --- Floor ---
@@ -28,6 +23,9 @@ class FloorUpdate(FloorBase):
 class FloorOut(FloorBase):
     id: int
     image_path: Optional[str] = None
+    pdf_path: Optional[str] = None
+    pdf_page_width: Optional[float] = None
+    pdf_page_height: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -47,6 +45,8 @@ class TeamBase(BaseModel):
     must_separate_from: List[int] = []
     floor_preference: Optional[int] = None
     notes: str = ""
+    has_team_lead: bool = False
+    team_lead_name: str = ""
 
 
 class TeamCreate(TeamBase):
@@ -96,6 +96,60 @@ class AllocationPositionUpdate(BaseModel):
     pos_y: float
     pos_w: float
     pos_h: float
+
+
+# --- FloorElement ---
+class FloorElementOut(BaseModel):
+    id: int
+    floor_id: int
+    element_type: str
+    x: float
+    y: float
+    w: float
+    h: float
+    nx: float
+    ny: float
+    nw: float
+    nh: float
+    label: str
+    confidence: float
+    team_id: Optional[int] = None
+    is_lead_office: bool
+    team: Optional[TeamOut] = None
+
+    class Config:
+        from_attributes = True
+
+
+class FloorElementPatch(BaseModel):
+    element_type: Optional[str] = None
+    team_id: Optional[int] = None
+    is_lead_office: Optional[bool] = None
+    label: Optional[str] = None
+
+
+class FloorElementCreate(BaseModel):
+    element_type: str = "desk"
+    nx: float
+    ny: float
+    nw: float = 0.025
+    nh: float = 0.015
+    label: str = ""
+
+
+class BulkAssignRequest(BaseModel):
+    team_id: Optional[int] = None
+    element_ids: List[int]
+
+
+class AutoAssignRequest(BaseModel):
+    scenario_id: int
+
+
+class PDFParseResult(BaseModel):
+    desk_count: int
+    office_count: int
+    warnings: List[str]
 
 
 # --- Scenario ---

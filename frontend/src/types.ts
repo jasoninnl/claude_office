@@ -12,6 +12,9 @@ export interface Floor {
   amenities: string[];
   notes: string;
   image_path: string | null;
+  pdf_path: string | null;
+  pdf_page_width: number | null;
+  pdf_page_height: number | null;
 }
 
 export interface Team {
@@ -28,6 +31,8 @@ export interface Team {
   must_separate_from: number[];
   floor_preference: number | null;
   notes: string;
+  has_team_lead: boolean;
+  team_lead_name: string;
 }
 
 export interface Allocation {
@@ -41,6 +46,31 @@ export interface Allocation {
   pos_h: number | null;
   team: Team;
   floor: Floor;
+}
+
+export interface FloorElement {
+  id: number;
+  floor_id: number;
+  element_type: "desk" | "office";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  nx: number;   // normalised 0–1
+  ny: number;
+  nw: number;
+  nh: number;
+  label: string;
+  confidence: number;
+  team_id: number | null;
+  is_lead_office: boolean;
+  team: Team | null;
+}
+
+export interface PDFParseResult {
+  desk_count: number;
+  office_count: number;
+  warnings: string[];
 }
 
 export interface ScoreBreakdown {
