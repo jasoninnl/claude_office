@@ -117,14 +117,6 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     }
   };
 
-  if (!scenario) {
-    return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
-        No scenario selected. Create or select a scenario in the Scenarios tab first.
-      </div>
-    );
-  }
-
   const hasPdf = !!(activeFloor?.pdf_path);
 
   return (
@@ -173,7 +165,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
             <div>
               <h3 className="font-semibold text-white">{activeFloor.name}</h3>
               <p className="text-xs text-gray-500">
-                {scenario.name} · {allocationsForFloor(activeFloor.id).length} teams allocated
+                {scenario ? `${scenario.name} · ${allocationsForFloor(activeFloor.id).length} teams allocated` : "No scenario selected"}
                 {hasPdf && elements.length > 0 && (
                   <> · {elements.filter((e) => e.element_type === "desk").length} desks,{" "}
                   {elements.filter((e) => e.element_type === "office").length} offices detected</>
@@ -246,7 +238,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
               <div className="flex-1" />
               <button
                 onClick={handleAutoAssign}
-                disabled={autoAssigning || elements.length === 0}
+                disabled={autoAssigning || elements.length === 0 || !scenario}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
               >
                 {autoAssigning ? <span className="animate-spin">⟳</span> : <Wand2 size={12} />}
@@ -287,12 +279,16 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                   onElementsChange={() => loadElements(activeFloor.id)}
                 />
               )
-            ) : (
+            ) : scenario ? (
               <FloorPlanCanvas
                 floor={activeFloor}
                 allocations={allocationsForFloor(activeFloor.id)}
                 onPositionsSaved={onScenarioChange}
               />
+            ) : (
+              <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
+                Upload a PDF floor plan above, or select a scenario in the Scenarios tab to view team allocations.
+              </div>
             )}
           </div>
         </div>
