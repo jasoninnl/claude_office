@@ -40,6 +40,31 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
 
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _sync_floor_counts(db: Session, floor_id: int):
+    """Sync floor.total_desks and all allocation.desks_used from actual FloorElement data."""
+    desks = db.query(FloorElement).filter(
+        FloorElement.floor_id == floor_id,
+        FloorElement.element_type == "desk",
+    ).all()
+
+    floor = db.get(Floor, floor_id)
+    if floor:
+        floor.total_desks = len(desks)
+
+    team_counts: dict = {}
+    for d in desks:
+        if d.team_id:
+            team_counts[d.team_id] = team_counts.get(d.team_id, 0) + 1
+
+    allocs = db.query(Allocation).filter(Allocation.floor_id == floor_id).all()
+    for alloc in allocs:
+        alloc.desks_used = team_counts.get(alloc.team_id, 0)
+
+    db.commit()
+
+
 # ── Floors ──────────────────────────────────────────────────────────────────
 
 @app.get("/floors", response_model=List[FloorOut])
@@ -177,6 +202,7 @@ async def upload_floor_pdf(
         ))
 
     db.commit()
+    _sync_floor_counts(db, floor_id)
     return PDFParseResult(
         desk_count=result["desk_count"],
         office_count=result["office_count"],
@@ -265,7 +291,9 @@ def patch_element(
         el.is_lead_office = body.is_lead_office
     if body.label is not None:
         el.label = body.label
+    floor_id = el.floor_id
     db.commit()
+    _sync_floor_counts(db, floor_id)
     return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == element_id).first()
 
 
@@ -274,8 +302,10 @@ def delete_element(element_id: int, db: Session = Depends(get_db)):
     el = db.get(FloorElement, element_id)
     if not el:
         raise HTTPException(404, "Element not found")
+    floor_id = el.floor_id
     db.delete(el)
     db.commit()
+    _sync_floor_counts(db, floor_id)
     return {"ok": True}
 
 
@@ -294,6 +324,7 @@ def bulk_assign(
         if body.team_id is None:
             el.is_lead_office = False
     db.commit()
+    _sync_floor_counts(db, floor_id)
     return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
         FloorElement.id.in_(body.element_ids)
     ).all()
@@ -330,6 +361,7 @@ def auto_assign_floor(
 
     auto_assign(desks, offices, allocs)
     db.commit()
+    _sync_floor_counts(db, floor_id)
 
     return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
         FloorElement.floor_id == floor_id

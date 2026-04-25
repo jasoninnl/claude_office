@@ -51,7 +51,7 @@ export interface Allocation {
 export interface FloorElement {
   id: number;
   floor_id: number;
-  element_type: "desk" | "office";
+  element_type: "desk" | "office" | "meeting_room";
   x: number;
   y: number;
   w: number;

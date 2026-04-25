@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Upload, X, ImageIcon, Building2, FileText, Wand2, MousePointer, Square, DoorOpen } from "lucide-react";
+import { Upload, X, ImageIcon, Building2, FileText, Wand2, MousePointer, Square, DoorOpen, CalendarRange } from "lucide-react";
 import type { Scenario, Floor, Team, FloorElement, PDFParseResult } from "../types";
 import * as api from "../api";
 import FloorPlanCanvas from "./FloorPlanCanvas";
@@ -22,7 +22,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
   const [elements, setElements] = useState<FloorElement[]>([]);
   const [loadingElements, setLoadingElements] = useState(false);
   const [pdfResult, setPdfResult] = useState<PDFParseResult | null>(null);
-  const [drawMode, setDrawMode] = useState<"none" | "desk" | "office">("none");
+  const [drawMode, setDrawMode] = useState<"none" | "desk" | "office" | "meeting_room">("none");
   const [autoAssigning, setAutoAssigning] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -235,6 +235,12 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
               >
                 <DoorOpen size={11} /> Place Office
               </button>
+              <button
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${drawMode === "meeting_room" ? "bg-teal-700 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"}`}
+                onClick={() => setDrawMode(drawMode === "meeting_room" ? "none" : "meeting_room")}
+              >
+                <CalendarRange size={11} /> Place Meeting Room
+              </button>
               <div className="flex-1" />
               <button
                 onClick={handleAutoAssign}
@@ -276,7 +282,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                   teams={teams}
                   drawMode={drawMode}
                   onDrawModeChange={setDrawMode}
-                  onElementsChange={() => loadElements(activeFloor.id)}
+                  onElementsChange={() => { loadElements(activeFloor.id); onFloorChange(); onScenarioChange(); }}
                 />
               )
             ) : scenario ? (
