@@ -43,16 +43,34 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _sync_floor_counts(db: Session, floor_id: int):
-    """Sync floor.total_desks and all allocation.desks_used from actual FloorElement data."""
+    """Sync floor.total_desks, floor.meeting_rooms, and allocation.desks_used from FloorElement data."""
+    floor = db.get(Floor, floor_id)
+    if not floor:
+        return
+
     desks = db.query(FloorElement).filter(
         FloorElement.floor_id == floor_id,
         FloorElement.element_type == "desk",
     ).all()
 
-    floor = db.get(Floor, floor_id)
-    if floor:
-        floor.total_desks = len(desks)
+    floor.total_desks = len(desks)
 
+    # Sync meeting_rooms list — preserve existing capacities by matching on name
+    mr_elements = db.query(FloorElement).filter(
+        FloorElement.floor_id == floor_id,
+        FloorElement.element_type == "meeting_room",
+    ).order_by(FloorElement.y, FloorElement.x).all()
+
+    capacity_by_name: dict = {
+        r["name"]: r.get("capacity", 0) for r in (floor.meeting_rooms or [])
+    }
+    new_rooms = []
+    for i, el in enumerate(mr_elements, 1):
+        name = el.label if el.label else f"Meeting Room {i}"
+        new_rooms.append({"name": name, "capacity": capacity_by_name.get(name, 0)})
+    floor.meeting_rooms = new_rooms
+
+    # Sync allocation.desks_used for every scenario allocation on this floor
     team_counts: dict = {}
     for d in desks:
         if d.team_id:
@@ -269,6 +287,7 @@ def add_element(
     db.add(el)
     db.commit()
     db.refresh(el)
+    _sync_floor_counts(db, floor_id)
     return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == el.id).first()
 
 
