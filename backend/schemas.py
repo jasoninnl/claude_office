@@ -126,6 +126,10 @@ class FloorElementPatch(BaseModel):
     team_id: Optional[int] = None
     is_lead_office: Optional[bool] = None
     label: Optional[str] = None
+    nx: Optional[float] = None
+    ny: Optional[float] = None
+    nw: Optional[float] = None
+    nh: Optional[float] = None
 
 
 class FloorElementCreate(BaseModel):

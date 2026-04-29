@@ -311,6 +311,21 @@ def patch_element(
     if body.label is not None:
         el.label = body.label
     floor_id = el.floor_id
+    floor = db.get(Floor, floor_id)
+    pw = floor.pdf_page_width if floor else 841
+    ph = floor.pdf_page_height if floor else 595
+    if body.nx is not None:
+        el.nx = body.nx
+        el.x = body.nx * pw
+    if body.ny is not None:
+        el.ny = body.ny
+        el.y = body.ny * ph
+    if body.nw is not None:
+        el.nw = body.nw
+        el.w = body.nw * pw
+    if body.nh is not None:
+        el.nh = body.nh
+        el.h = body.nh * ph
     db.commit()
     _sync_floor_counts(db, floor_id)
     return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == element_id).first()

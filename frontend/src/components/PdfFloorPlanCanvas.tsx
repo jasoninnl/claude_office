@@ -45,6 +45,8 @@ export default function PdfFloorPlanCanvas({
   const [lasso, setLasso] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const lassoStart = useRef<{ nx: number; ny: number } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deskOrientation, setDeskOrientation] = useState<"landscape" | "portrait">("landscape");
+  const [preview, setPreview] = useState<{ nx: number; ny: number; nw: number; nh: number } | null>(null);
 
   const desks = elements.filter((e) => e.element_type === "desk");
   const offices = elements.filter((e) => e.element_type === "office");
@@ -60,12 +62,61 @@ export default function PdfFloorPlanCanvas({
     };
   }, []);
 
+  // Returns snapped top-left position for a desk placed at cursor (cx,cy)
+  const snapDesk = useCallback((cx: number, cy: number, nw: number, nh: number): { nx: number; ny: number } => {
+    const THRESHOLD = 0.09;
+    const GAP = 0.004;
+    let best = Infinity;
+    let result = { nx: cx - nw / 2, ny: cy - nh / 2 };
+    for (const desk of desks) {
+      const ecx = desk.nx + desk.nw / 2;
+      const ecy = desk.ny + desk.nh / 2;
+      const dx = Math.abs(cx - ecx);
+      const dy = Math.abs(cy - ecy);
+      const dist = dx * dx + dy * dy;
+      if (dist < THRESHOLD * THRESHOLD && dist < best) {
+        best = dist;
+        if (dy <= dx) {
+          // Same horizontal row — align Y centres, place adjacent on X
+          const snappedCx = cx >= ecx
+            ? ecx + desk.nw / 2 + GAP + nw / 2
+            : ecx - desk.nw / 2 - GAP - nw / 2;
+          result = { nx: snappedCx - nw / 2, ny: ecy - nh / 2 };
+        } else {
+          // Same vertical column — align X centres, place adjacent on Y
+          const snappedCy = cy >= ecy
+            ? ecy + desk.nh / 2 + GAP + nh / 2
+            : ecy - desk.nh / 2 - GAP - nh / 2;
+          result = { nx: ecx - nw / 2, ny: snappedCy - nh / 2 };
+        }
+      }
+    }
+    return result;
+  }, [desks]);
+
   const handleElementClick = (e: React.MouseEvent, el: FloorElement) => {
     e.stopPropagation();
     if (drawMode !== "none") return;
     const rect = (e.target as SVGElement).getBoundingClientRect();
     setPopover({ elementId: el.id, screenX: rect.left + rect.width / 2, screenY: rect.top });
     setSelected(new Set([el.id]));
+  };
+
+  const deskSize = useCallback((): { nw: number; nh: number } => {
+    return deskOrientation === "landscape" ? { nw: 0.025, nh: 0.018 } : { nw: 0.018, nh: 0.025 };
+  }, [deskOrientation]);
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (drawMode === "none") { setPreview(null); return; }
+    const { nx, ny } = toNorm(e);
+    if (drawMode === "desk") {
+      const { nw, nh } = deskSize();
+      const pos = snapDesk(nx, ny, nw, nh);
+      setPreview({ ...pos, nw, nh });
+    } else {
+      const nw = 0.06, nh = 0.08;
+      setPreview({ nx: nx - nw / 2, ny: ny - nh / 2, nw, nh });
+    }
   };
 
   const handleSvgClick = async (e: React.MouseEvent) => {
@@ -75,17 +126,18 @@ export default function PdfFloorPlanCanvas({
       return;
     }
     const { nx, ny } = toNorm(e);
-    const nw = drawMode === "desk" ? 0.025 : 0.06;
-    const nh = drawMode === "desk" ? 0.018 : 0.08;
+    let finalNx: number, finalNy: number, nw: number, nh: number;
+    if (drawMode === "desk") {
+      ({ nw, nh } = deskSize());
+      const pos = snapDesk(nx, ny, nw, nh);
+      finalNx = pos.nx; finalNy = pos.ny;
+    } else {
+      nw = 0.06; nh = 0.08;
+      finalNx = nx - nw / 2; finalNy = ny - nh / 2;
+    }
     setSaving(true);
     try {
-      await api.addFloorElement(floor.id, {
-        element_type: drawMode,
-        nx: nx - nw / 2,
-        ny: ny - nh / 2,
-        nw,
-        nh,
-      });
+      await api.addFloorElement(floor.id, { element_type: drawMode, nx: finalNx, ny: finalNy, nw, nh });
       onElementsChange();
     } finally {
       setSaving(false);
@@ -164,6 +216,21 @@ export default function PdfFloorPlanCanvas({
     }
   };
 
+  const rotateDeskSize = async (id: number) => {
+    const el = elements.find((e) => e.id === id);
+    if (!el) return;
+    const cx = el.nx + el.nw / 2, cy = el.ny + el.nh / 2;
+    const nw = el.nh, nh = el.nw;
+    setSaving(true);
+    try {
+      await api.patchFloorElement(id, { nx: cx - nw / 2, ny: cy - nh / 2, nw, nh });
+      onElementsChange();
+      setPopover(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const reclassify = async (id: number, type: ElementType) => {
     setSaving(true);
     try {
@@ -202,10 +269,19 @@ export default function PdfFloorPlanCanvas({
         )}
         {selected.size > 0 && <span className="text-indigo-400 font-medium">{selected.size} selected</span>}
         {saving && <span className="text-gray-400 animate-pulse">Saving…</span>}
+        {drawMode === "desk" && (
+          <button
+            onClick={() => setDeskOrientation((o) => o === "landscape" ? "portrait" : "landscape")}
+            className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 hover:text-white border border-gray-600 font-mono"
+            title="Toggle desk orientation"
+          >
+            {deskOrientation === "landscape" ? "▬ Landscape" : "▮ Portrait"}
+          </button>
+        )}
         <span className="ml-auto text-gray-600 italic">
           {drawMode === "none"
             ? "Click element to assign · Shift+drag to lasso select"
-            : `Click to place ${drawMode.replace("_", " ")} · click toolbar button again to cancel`}
+            : `Click to place ${drawMode.replace("_", " ")} · click toolbar to cancel`}
         </span>
       </div>
 
@@ -218,6 +294,8 @@ export default function PdfFloorPlanCanvas({
         style={{ aspectRatio }}
         onMouseDown={handleMouseDown}
         onClick={handleSvgClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setPreview(null)}
       >
         {floor.image_path && (
           <img
@@ -351,6 +429,16 @@ export default function PdfFloorPlanCanvas({
             );
           })}
 
+          {/* Placement preview */}
+          {preview && drawMode !== "none" && (
+            <rect
+              x={preview.nx} y={preview.ny} width={preview.nw} height={preview.nh}
+              fill="rgba(99,102,241,0.25)" stroke="#6366f1"
+              strokeWidth="0.002" strokeDasharray="0.008,0.004" rx="0.002"
+              style={{ pointerEvents: "none" }}
+            />
+          )}
+
           {/* Lasso rectangle */}
           {lasso && (
             <rect
@@ -372,6 +460,7 @@ export default function PdfFloorPlanCanvas({
             onAssign={(tid) => assignSelected(tid)}
             onDelete={() => deleteElement(popoverElement.id)}
             onReclassify={(t) => reclassify(popoverElement.id, t)}
+            onRotate={() => rotateDeskSize(popoverElement.id)}
             onClose={() => { setPopover(null); setSelected(new Set()); }}
           />
         )}
@@ -449,10 +538,11 @@ interface PopoverProps {
   onAssign: (teamId: number | null) => void;
   onDelete: () => void;
   onReclassify: (type: "desk" | "office" | "meeting_room") => void;
+  onRotate: () => void;
   onClose: () => void;
 }
 
-function ElementPopover({ element, teams, screenX, screenY, containerRef, onAssign, onDelete, onReclassify, onClose }: PopoverProps) {
+function ElementPopover({ element, teams, screenX, screenY, containerRef, onAssign, onDelete, onReclassify, onRotate, onClose }: PopoverProps) {
   const rect = containerRef.current?.getBoundingClientRect();
   const POPOVER_W = 224;   // slightly wider than w-52 to be safe
   const POPOVER_H_EST = 260;
@@ -525,13 +615,21 @@ function ElementPopover({ element, teams, screenX, screenY, containerRef, onAssi
         </div>
 
         <div className="border-t border-gray-700 pt-1.5 mt-1.5 flex gap-1 flex-wrap">
+          {element.element_type === "desk" && (
+            <button
+              onClick={onRotate}
+              className="flex-1 text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded px-2 py-1 whitespace-nowrap"
+            >
+              ↺ Rotate 90°
+            </button>
+          )}
           {otherTypes.map((t) => (
             <button
               key={t}
               onClick={() => onReclassify(t)}
               className="flex-1 text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded px-2 py-1 whitespace-nowrap"
             >
-              → {t === "meeting_room" ? "Meeting Room" : t.charAt(0).toUpperCase() + t.slice(1)}
+              → {t === "meeting_room" ? "Mtg Room" : t.charAt(0).toUpperCase() + t.slice(1)}
             </button>
           ))}
           <button

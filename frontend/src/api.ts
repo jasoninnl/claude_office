@@ -57,7 +57,7 @@ export const addFloorElement = (
 
 export const patchFloorElement = (
   elementId: number,
-  data: { element_type?: string; team_id?: number | null; is_lead_office?: boolean; label?: string }
+  data: { element_type?: string; team_id?: number | null; is_lead_office?: boolean; label?: string; nx?: number; ny?: number; nw?: number; nh?: number }
 ) => req<FloorElement>(`/floor-elements/${elementId}`, { method: "PATCH", body: JSON.stringify(data) });
 
 export const deleteFloorElement = (elementId: number) =>
