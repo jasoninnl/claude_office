@@ -141,6 +141,18 @@ export default function PdfFloorPlanCanvas({
     }
   };
 
+  const deleteSelected = async () => {
+    if (!selected.size) return;
+    setSaving(true);
+    try {
+      await Promise.all([...selected].map((id) => api.deleteFloorElement(id)));
+      onElementsChange();
+      setSelected(new Set());
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const deleteElement = async (id: number) => {
     setSaving(true);
     try {
@@ -383,6 +395,13 @@ export default function PdfFloorPlanCanvas({
               className="px-2 py-0.5 rounded-full text-xs bg-gray-700 text-gray-300"
             >
               Unassign
+            </button>
+            <div className="w-px h-4 bg-gray-600 mx-1" />
+            <button
+              onClick={(e) => { e.stopPropagation(); deleteSelected(); }}
+              className="px-2 py-0.5 rounded-full text-xs bg-red-900 text-red-300 hover:bg-red-800"
+            >
+              Delete {selected.size}
             </button>
             <button onClick={() => setSelected(new Set())} className="ml-1 text-gray-500 hover:text-white">
               <X size={12} />
