@@ -103,8 +103,13 @@ export default function PdfFloorPlanCanvas({
   };
 
   const deskSize = useCallback((): { nw: number; nh: number } => {
-    return deskOrientation === "landscape" ? { nw: 0.025, nh: 0.018 } : { nw: 0.018, nh: 0.025 };
-  }, [deskOrientation]);
+    if (deskOrientation === "landscape") return { nw: 0.025, nh: 0.018 };
+    // Portrait: rotate 90° keeping the same physical pixel footprint.
+    // nw_landscape * page_width == nh_portrait * page_width  →  must compensate for aspect ratio.
+    const pw = floor.pdf_page_width || 842;
+    const ph = floor.pdf_page_height || 595;
+    return { nw: (0.018 * ph) / pw, nh: (0.025 * pw) / ph };
+  }, [deskOrientation, floor.pdf_page_width, floor.pdf_page_height]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (drawMode === "none") { setPreview(null); return; }
@@ -219,8 +224,12 @@ export default function PdfFloorPlanCanvas({
   const rotateDeskSize = async (id: number) => {
     const el = elements.find((e) => e.id === id);
     if (!el) return;
+    const pw = floor.pdf_page_width || 842;
+    const ph = floor.pdf_page_height || 595;
+    // Swap physical pixel dimensions, then convert back to normalised coords
+    const w_px = el.nw * pw, h_px = el.nh * ph;
+    const nw = h_px / pw, nh = w_px / ph;
     const cx = el.nx + el.nw / 2, cy = el.ny + el.nh / 2;
-    const nw = el.nh, nh = el.nw;
     setSaving(true);
     try {
       await api.patchFloorElement(id, { nx: cx - nw / 2, ny: cy - nh / 2, nw, nh });
