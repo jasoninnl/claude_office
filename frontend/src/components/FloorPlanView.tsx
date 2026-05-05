@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Upload, X, ImageIcon, Building2, FileText, Wand2, MousePointer, Square, DoorOpen, CalendarRange } from "lucide-react";
+import { Upload, X, ImageIcon, Building2, FileText, Wand2, MousePointer, Square, DoorOpen, CalendarRange, Printer } from "lucide-react";
 import type { Scenario, Floor, Team, FloorElement, PDFParseResult } from "../types";
 import * as api from "../api";
 import FloorPlanCanvas from "./FloorPlanCanvas";
@@ -117,6 +117,71 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     }
   };
 
+  const handlePrint = () => {
+    if (!activeFloor) return;
+    const ar = activeFloor.pdf_page_width && activeFloor.pdf_page_height
+      ? activeFloor.pdf_page_width / activeFloor.pdf_page_height
+      : 16 / 9;
+
+    const svgEl = document.querySelector('[data-print-svg]') as SVGElement | null;
+    const svgHtml = svgEl ? svgEl.outerHTML : "";
+    const imgSrc = activeFloor.image_path
+      ? `${window.location.origin}${activeFloor.image_path}` : "";
+
+    const deskCount = elements.filter((e) => e.element_type === "desk").length;
+    const officeCount = elements.filter((e) => e.element_type === "office").length;
+    const mrCount = elements.filter((e) => e.element_type === "meeting_room").length;
+    const allocs = scenario ? allocationsForFloor(activeFloor.id) : [];
+
+    const legendItems = hasPdf
+      ? teams
+          .map((t) => ({ t, count: elements.filter((e) => e.element_type === "desk" && e.team_id === t.id).length }))
+          .filter(({ count }) => count > 0)
+          .map(({ t, count }) =>
+            `<div class="li"><div class="lc" style="background:${t.color}"></div><span>${t.name} — ${count} desks</span></div>`)
+          .join("")
+      : allocs
+          .map((a) =>
+            `<div class="li"><div class="lc" style="background:${a.team.color}"></div><span>${a.team.name} — ${a.desks_used} desks</span></div>`)
+          .join("");
+
+    const subtitle = hasPdf
+      ? [deskCount && `${deskCount} desks`, officeCount && `${officeCount} offices`, mrCount && `${mrCount} meeting rooms`]
+          .filter(Boolean).join(" · ")
+      : scenario ? `${scenario.name} · ${allocs.length} teams` : "";
+
+    const pw = window.open("", "_blank");
+    if (!pw) return;
+
+    pw.document.write(`<!DOCTYPE html>
+<html><head>
+  <title>${activeFloor.name}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{padding:24px;font-family:-apple-system,Helvetica,sans-serif;color:#111;background:#fff}
+    h1{font-size:18pt;margin-bottom:4px}
+    .sub{font-size:10pt;color:#555;margin-bottom:18px}
+    .canvas{position:relative;width:100%;overflow:hidden}
+    .canvas img{display:block;width:100%;height:100%;object-fit:fill}
+    .canvas svg{position:absolute;top:0;left:0;width:100%;height:100%}
+    .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;border-top:1px solid #ddd;padding-top:14px}
+    .li{display:flex;align-items:center;gap:6px;font-size:10pt}
+    .lc{width:12px;height:12px;border-radius:2px;flex-shrink:0}
+    @media print{body{padding:8px}@page{margin:1cm}}
+  </style>
+</head><body>
+  <h1>${activeFloor.name}</h1>
+  ${subtitle ? `<div class="sub">${subtitle}</div>` : ""}
+  <div class="canvas" style="aspect-ratio:${ar}">
+    ${imgSrc ? `<img src="${imgSrc}" />` : ""}
+    ${svgHtml}
+  </div>
+  ${legendItems ? `<div class="legend">${legendItems}</div>` : ""}
+  <script>window.onload=function(){window.print()}<\/script>
+</body></html>`);
+    pw.document.close();
+  };
+
   const hasPdf = !!(activeFloor?.pdf_path);
 
   return (
@@ -211,6 +276,14 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                     {activeFloor.image_path ? "Replace floor plan" : "Upload floor plan"}
                   </button>
                 </>
+              )}
+              {(activeFloor.image_path || activeFloor.pdf_path) && (
+                <button
+                  onClick={handlePrint}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-300 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  <Printer size={12} /> Print
+                </button>
               )}
             </div>
           </div>

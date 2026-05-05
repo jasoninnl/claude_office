@@ -353,6 +353,7 @@ export default function PdfFloorPlanCanvas({
 
         <svg
           ref={svgRef}
+          data-print-svg="true"
           className="absolute inset-0 w-full h-full"
           viewBox="0 0 1 1"
           preserveAspectRatio="none"
