@@ -167,8 +167,10 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
               <p className="text-xs text-gray-500">
                 {scenario ? `${scenario.name} · ${allocationsForFloor(activeFloor.id).length} teams allocated` : "No scenario selected"}
                 {hasPdf && elements.length > 0 && (
-                  <> · {elements.filter((e) => e.element_type === "desk").length} desks,{" "}
-                  {elements.filter((e) => e.element_type === "office").length} offices detected</>
+                  <> · {elements.filter((e) => e.element_type === "desk").length} desks
+                  {elements.filter((e) => e.element_type === "office").length > 0 && `, ${elements.filter((e) => e.element_type === "office").length} offices`}
+                  {elements.filter((e) => e.element_type === "meeting_room").length > 0 && `, ${elements.filter((e) => e.element_type === "meeting_room").length} meeting rooms`}
+                  </>
                 )}
               </p>
             </div>
@@ -262,9 +264,11 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
               ))}
             </div>
           )}
-          {pdfResult && (
+          {hasPdf && elements.length > 0 && (
             <div className="px-4 py-2 bg-gray-950 border-b border-gray-800 text-xs text-gray-500">
-              Detected: {pdfResult.desk_count} desks, {pdfResult.office_count} offices
+              {elements.filter((e) => e.element_type === "desk").length} desks ·{" "}
+              {elements.filter((e) => e.element_type === "office").length} offices ·{" "}
+              {elements.filter((e) => e.element_type === "meeting_room").length} meeting rooms
             </div>
           )}
 
