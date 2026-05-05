@@ -47,6 +47,12 @@ export default function PdfFloorPlanCanvas({
   const [saving, setSaving] = useState(false);
   const [deskOrientation, setDeskOrientation] = useState<"landscape" | "portrait">("landscape");
   const [preview, setPreview] = useState<{ nx: number; ny: number; nw: number; nh: number } | null>(null);
+  const [dragging, setDragging] = useState<{
+    id: number; origNx: number; origNy: number;
+    offsetNx: number; offsetNy: number; nx: number; ny: number;
+  } | null>(null);
+  const draggingRef = useRef<typeof dragging>(null);
+  const dragMovedRef = useRef(false);
 
   const desks = elements.filter((e) => e.element_type === "desk");
   const offices = elements.filter((e) => e.element_type === "office");
@@ -94,9 +100,20 @@ export default function PdfFloorPlanCanvas({
     return result;
   }, [desks]);
 
+  const handleElementMouseDown = useCallback((e: React.MouseEvent, el: FloorElement) => {
+    if (e.shiftKey || drawMode !== "none") return;
+    e.stopPropagation();
+    const { nx, ny } = toNorm(e);
+    dragMovedRef.current = false;
+    const state = { id: el.id, origNx: el.nx, origNy: el.ny, offsetNx: nx - el.nx, offsetNy: ny - el.ny, nx: el.nx, ny: el.ny };
+    draggingRef.current = state;
+    setDragging(state);
+  }, [drawMode, toNorm]);
+
   const handleElementClick = (e: React.MouseEvent, el: FloorElement) => {
     e.stopPropagation();
     if (drawMode !== "none") return;
+    if (dragMovedRef.current) return; // was a drag, not a click
     const rect = (e.target as SVGElement).getBoundingClientRect();
     setPopover({ elementId: el.id, screenX: rect.left + rect.width / 2, screenY: rect.top });
     setSelected(new Set([el.id]));
@@ -158,32 +175,50 @@ export default function PdfFloorPlanCanvas({
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!lassoStart.current || !containerRef.current) return;
-      const { nx, ny } = toNorm(e);
-      const sx = lassoStart.current.nx;
-      const sy = lassoStart.current.ny;
-      setLasso({ x: Math.min(sx, nx), y: Math.min(sy, ny), w: Math.abs(nx - sx), h: Math.abs(ny - sy) });
+      // Lasso tracking
+      if (lassoStart.current && containerRef.current) {
+        const { nx, ny } = toNorm(e);
+        const sx = lassoStart.current.nx, sy = lassoStart.current.ny;
+        setLasso({ x: Math.min(sx, nx), y: Math.min(sy, ny), w: Math.abs(nx - sx), h: Math.abs(ny - sy) });
+      }
+      // Drag tracking
+      if (draggingRef.current) {
+        const { nx, ny } = toNorm(e);
+        const newNx = nx - draggingRef.current.offsetNx;
+        const newNy = ny - draggingRef.current.offsetNy;
+        if (Math.hypot(newNx - draggingRef.current.origNx, newNy - draggingRef.current.origNy) > 0.005) {
+          dragMovedRef.current = true;
+        }
+        const updated = { ...draggingRef.current, nx: newNx, ny: newNy };
+        draggingRef.current = updated;
+        setDragging(updated);
+      }
     };
     const onUp = () => {
+      // Lasso commit
       if (lasso) {
         const ids = new Set(
-          elements
-            .filter((el) => {
-              const cx = el.nx + el.nw / 2;
-              const cy = el.ny + el.nh / 2;
-              return cx >= lasso.x && cx <= lasso.x + lasso.w && cy >= lasso.y && cy <= lasso.y + lasso.h;
-            })
-            .map((el) => el.id)
+          elements.filter((el) => {
+            const cx = el.nx + el.nw / 2, cy = el.ny + el.nh / 2;
+            return cx >= lasso.x && cx <= lasso.x + lasso.w && cy >= lasso.y && cy <= lasso.y + lasso.h;
+          }).map((el) => el.id)
         );
         setSelected(ids);
       }
       lassoStart.current = null;
       setLasso(null);
+      // Drag commit
+      const d = draggingRef.current;
+      if (d && dragMovedRef.current) {
+        api.patchFloorElement(d.id, { nx: d.nx, ny: d.ny }).then(() => onElementsChange());
+      }
+      draggingRef.current = null;
+      setDragging(null);
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [elements, lasso, toNorm]);
+  }, [elements, lasso, toNorm, onElementsChange]);
 
   const assignSelected = async (teamId: number | null) => {
     if (!selected.size) return;
@@ -298,7 +333,7 @@ export default function PdfFloorPlanCanvas({
       <div
         ref={containerRef}
         className={`relative w-full rounded-xl overflow-hidden select-none bg-gray-950 ${
-          drawMode !== "none" ? "cursor-crosshair" : "cursor-default"
+          drawMode !== "none" ? "cursor-crosshair" : dragging ? "cursor-grabbing" : "cursor-default"
         }`}
         style={{ aspectRatio }}
         onMouseDown={handleMouseDown}
@@ -326,19 +361,24 @@ export default function PdfFloorPlanCanvas({
           {desks.map((el) => {
             const isSelected = selected.has(el.id);
             const isHovered = hovered === el.id;
+            const isDragged = dragging?.id === el.id;
+            const rx = isDragged ? dragging!.nx : el.nx;
+            const ry = isDragged ? dragging!.ny : el.ny;
             const fill = teamColor(el.team_id, teams, isHovered || isSelected ? 0.85 : 0.65);
             const stroke = teamColor(el.team_id, teams, 1);
             return (
               <rect
                 key={el.id}
-                x={el.nx} y={el.ny} width={el.nw} height={el.nh}
+                x={rx} y={ry} width={el.nw} height={el.nh}
                 fill={fill}
                 stroke={isSelected ? "#fff" : stroke}
                 strokeWidth={isSelected ? 0.003 : 0.001}
+                opacity={isDragged ? 0.7 : 1}
                 rx="0.002"
-                style={{ cursor: "pointer" }}
+                style={{ cursor: drawMode === "none" ? "grab" : "pointer" }}
                 onMouseEnter={() => setHovered(el.id)}
                 onMouseLeave={() => setHovered(null)}
+                onMouseDown={(e) => handleElementMouseDown(e, el)}
                 onClick={(e) => handleElementClick(e, el)}
               />
             );
@@ -348,19 +388,24 @@ export default function PdfFloorPlanCanvas({
           {offices.map((el) => {
             const isSelected = selected.has(el.id);
             const isHovered = hovered === el.id;
+            const isDragged = dragging?.id === el.id;
+            const rx = isDragged ? dragging!.nx : el.nx;
+            const ry = isDragged ? dragging!.ny : el.ny;
             const fill = teamColor(el.team_id, teams, isHovered || isSelected ? 0.45 : 0.25);
             const stroke = teamColor(el.team_id, teams, 1);
-            const cx = el.nx + el.nw / 2;
-            const cy = el.ny + el.nh / 2;
+            const cx = rx + el.nw / 2;
+            const cy = ry + el.nh / 2;
             const fontSize = Math.min(el.nw, el.nh) * 0.35;
             return (
-              <g key={el.id} style={{ cursor: "pointer" }}
+              <g key={el.id} style={{ cursor: drawMode === "none" ? "grab" : "pointer" }}
                 onMouseEnter={() => setHovered(el.id)}
                 onMouseLeave={() => setHovered(null)}
+                onMouseDown={(e) => handleElementMouseDown(e, el)}
                 onClick={(e) => handleElementClick(e, el)}
+                opacity={isDragged ? 0.7 : 1}
               >
                 <rect
-                  x={el.nx} y={el.ny} width={el.nw} height={el.nh}
+                  x={rx} y={ry} width={el.nw} height={el.nh}
                   fill={fill} stroke={isSelected ? "#fff" : stroke}
                   strokeWidth={isSelected ? 0.004 : 0.003}
                   strokeDasharray={el.is_lead_office ? "0.012,0.006" : "none"}
@@ -368,12 +413,12 @@ export default function PdfFloorPlanCanvas({
                 />
                 {el.is_lead_office && (
                   <>
-                    <text x={cx} y={el.ny + el.nh * 0.38} textAnchor="middle" dominantBaseline="middle"
+                    <text x={cx} y={ry + el.nh * 0.38} textAnchor="middle" dominantBaseline="middle"
                       fontSize={fontSize * 1.1} fill="white"
                       style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.8))" }}>
                       👑
                     </text>
-                    <text x={cx} y={el.ny + el.nh * 0.72} textAnchor="middle" dominantBaseline="middle"
+                    <text x={cx} y={ry + el.nh * 0.72} textAnchor="middle" dominantBaseline="middle"
                       fontSize={Math.min(fontSize, 0.018)} fill="white" fontWeight="600"
                       style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.9))" }}>
                       {el.label || "Team Lead"}
@@ -401,6 +446,9 @@ export default function PdfFloorPlanCanvas({
           {meetingRooms.map((el) => {
             const isSelected = selected.has(el.id);
             const isHovered = hovered === el.id;
+            const isDragged = dragging?.id === el.id;
+            const rx = isDragged ? dragging!.nx : el.nx;
+            const ry = isDragged ? dragging!.ny : el.ny;
             const alpha = isHovered || isSelected ? 0.45 : 0.25;
             const fill = el.team_id
               ? teamColor(el.team_id, teams, alpha)
@@ -408,17 +456,19 @@ export default function PdfFloorPlanCanvas({
             const stroke = el.team_id
               ? teamColor(el.team_id, teams, 1)
               : "rgba(20,184,166,1)";
-            const cx = el.nx + el.nw / 2;
-            const cy = el.ny + el.nh / 2;
+            const cx = rx + el.nw / 2;
+            const cy = ry + el.nh / 2;
             const fontSize = Math.min(el.nw, el.nh) * 0.28;
             return (
-              <g key={el.id} style={{ cursor: "pointer" }}
+              <g key={el.id} style={{ cursor: drawMode === "none" ? "grab" : "pointer" }}
                 onMouseEnter={() => setHovered(el.id)}
                 onMouseLeave={() => setHovered(null)}
+                onMouseDown={(e) => handleElementMouseDown(e, el)}
                 onClick={(e) => handleElementClick(e, el)}
+                opacity={isDragged ? 0.7 : 1}
               >
                 <rect
-                  x={el.nx} y={el.ny} width={el.nw} height={el.nh}
+                  x={rx} y={ry} width={el.nw} height={el.nh}
                   fill={fill} stroke={isSelected ? "#fff" : stroke}
                   strokeWidth={isSelected ? 0.004 : 0.003}
                   strokeDasharray="0.008,0.004"
