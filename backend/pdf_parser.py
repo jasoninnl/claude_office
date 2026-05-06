@@ -21,7 +21,9 @@ import fitz  # PyMuPDF
 DESK_AREA_MIN = 300
 DESK_AREA_MAX = 8_000
 OFFICE_AREA_MIN = 5_000
-OFFICE_AREA_MAX = 150_000
+OFFICE_AREA_MAX = 80_000    # reduced: private offices rarely exceed ~9m×9m at 1:100
+MEETING_AREA_MIN = 8_000
+MEETING_AREA_MAX = 400_000  # meeting rooms can be large
 
 # Rasterisation resolution
 RASTER_DPI = 150
@@ -59,21 +61,36 @@ def process_pdf(pdf_path: Path) -> dict[str, Any]:
     elements = _extract_elements(page, pw, ph)
     _enrich_offices_with_labels(page, elements, pw, ph)
 
+    # Require offices to carry a text label — unlabelled large rectangles are
+    # almost always zone boundaries, corridors, or open areas, not private offices.
+    # Promote meeting-room-labelled shapes to the correct type.
+    _MEETING_KEYWORDS = {"meeting", "conference", "board", "seminar", "huddle", "training"}
+    filtered = []
+    for el in elements:
+        if el["element_type"] == "office":
+            if not el["label"]:
+                continue  # skip unlabelled large rectangles
+            if any(k in el["label"].lower() for k in _MEETING_KEYWORDS):
+                el["element_type"] = "meeting_room"
+        filtered.append(el)
+    elements = filtered
+
     doc.close()
 
     warnings: list[str] = []
     desk_count = sum(1 for e in elements if e["element_type"] == "desk")
     office_count = sum(1 for e in elements if e["element_type"] == "office")
+    meeting_room_count = sum(1 for e in elements if e["element_type"] == "meeting_room")
 
     if desk_count == 0:
         warnings.append(
             "No desk symbols detected. The PDF may use non-standard symbols or "
             "be a scanned image. Use the canvas tools to manually place desks."
         )
-    if office_count == 0:
+    if office_count == 0 and meeting_room_count == 0:
         warnings.append(
-            "No office rooms detected. Team leads will not be automatically "
-            "assigned to separate offices. Add offices manually if needed."
+            "No labelled office or meeting rooms detected. Add them manually "
+            "using the Place Office / Place Meeting Room tools if needed."
         )
 
     return {
@@ -117,8 +134,13 @@ def _extract_elements(page: fitz.Page, pw: float, ph: float) -> list[dict]:
 
         if DESK_AREA_MIN <= area <= DESK_AREA_MAX and aspect <= 4:
             etype = "desk"
-        elif OFFICE_AREA_MIN <= area <= OFFICE_AREA_MAX and aspect <= 3:
+        elif OFFICE_AREA_MIN <= area <= OFFICE_AREA_MAX and aspect <= 2.5:
+            # candidate office — must later pass the label filter
             etype = "office"
+        elif MEETING_AREA_MIN <= area <= MEETING_AREA_MAX and aspect <= 4:
+            # any mid-to-large rectangular space that isn't a desk is treated as
+            # a potential meeting room; the label-enrichment pass will name it
+            etype = "meeting_room"
         else:
             continue
 
@@ -145,16 +167,16 @@ def _confidence(area: float, aspect: float, etype: str) -> float:
 
 
 def _remove_desk_inside_office(elements: list[dict]) -> list[dict]:
-    """Drop desks whose bounding box is fully inside an office."""
-    offices = [e for e in elements if e["element_type"] == "office"]
+    """Drop desks whose bounding box is fully inside an office or meeting room."""
+    enclosures = [e for e in elements if e["element_type"] in ("office", "meeting_room")]
     result = []
     for el in elements:
         if el["element_type"] == "desk":
             inside = any(
-                el["x"] >= off["x"] and el["y"] >= off["y"]
-                and el["x"] + el["w"] <= off["x"] + off["w"]
-                and el["y"] + el["h"] <= off["y"] + off["h"]
-                for off in offices
+                el["x"] >= enc["x"] and el["y"] >= enc["y"]
+                and el["x"] + el["w"] <= enc["x"] + enc["w"]
+                and el["y"] + el["h"] <= enc["y"] + enc["h"]
+                for enc in enclosures
             )
             if inside:
                 continue
@@ -179,7 +201,7 @@ def _enrich_offices_with_labels(
         })
 
     for el in elements:
-        if el["element_type"] != "office":
+        if el["element_type"] not in ("office", "meeting_room"):
             continue
         for tb in text_blocks:
             if (el["nx"] <= tb["cx"] <= el["nx"] + el["nw"]
