@@ -119,9 +119,6 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
 
   const handlePrint = () => {
     if (!activeFloor) return;
-    const ar = activeFloor.pdf_page_width && activeFloor.pdf_page_height
-      ? activeFloor.pdf_page_width / activeFloor.pdf_page_height
-      : 16 / 9;
 
     const svgEl = document.querySelector('[data-print-svg]') as SVGElement | null;
     const svgHtml = svgEl ? svgEl.outerHTML : "";
@@ -131,6 +128,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
     const deskCount = elements.filter((e) => e.element_type === "desk").length;
     const officeCount = elements.filter((e) => e.element_type === "office").length;
     const mrCount = elements.filter((e) => e.element_type === "meeting_room").length;
+    const unassignedDesks = elements.filter((e) => e.element_type === "desk" && !e.team_id).length;
     const allocs = scenario ? allocationsForFloor(activeFloor.id) : [];
 
     const legendItems = hasPdf
@@ -138,17 +136,27 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
           .map((t) => ({ t, count: elements.filter((e) => e.element_type === "desk" && e.team_id === t.id).length }))
           .filter(({ count }) => count > 0)
           .map(({ t, count }) =>
-            `<div class="li"><div class="lc" style="background:${t.color}"></div><span>${t.name} — ${count} desks</span></div>`)
+            `<div class="li"><div class="lc" style="background:${t.color}"></div><span class="tn" style="color:${t.color}">${t.name}</span><span class="cnt">${count} desks</span></div>`)
           .join("")
       : allocs
           .map((a) =>
-            `<div class="li"><div class="lc" style="background:${a.team.color}"></div><span>${a.team.name} — ${a.desks_used} desks</span></div>`)
+            `<div class="li"><div class="lc" style="background:${a.team.color}"></div><span class="tn" style="color:${a.team.color}">${a.team.name}</span><span class="cnt">${a.desks_used} desks</span></div>`)
           .join("");
 
     const subtitle = hasPdf
-      ? [deskCount && `${deskCount} desks`, officeCount && `${officeCount} offices`, mrCount && `${mrCount} meeting rooms`]
+      ? [officeCount && `${officeCount} offices`, mrCount && `${mrCount} meeting rooms`]
           .filter(Boolean).join(" · ")
       : scenario ? `${scenario.name} · ${allocs.length} teams` : "";
+
+    const statsHtml = hasPdf && deskCount > 0
+      ? `<div class="stats">
+          <span>Total desks: <strong>${deskCount}</strong></span>
+          <span class="sep">·</span>
+          <span>Assigned: <strong>${deskCount - unassignedDesks}</strong></span>
+          <span class="sep">·</span>
+          <span class="${unassignedDesks > 0 ? "warn" : ""}">Unassigned: <strong>${unassignedDesks}</strong></span>
+        </div>`
+      : "";
 
     const pw = window.open("", "_blank");
     if (!pw) return;
@@ -158,21 +166,27 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
   <title>${activeFloor.name}</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{padding:24px;font-family:-apple-system,Helvetica,sans-serif;color:#111;background:#fff}
-    h1{font-size:18pt;margin-bottom:4px}
-    .sub{font-size:10pt;color:#555;margin-bottom:18px}
-    .canvas{position:relative;width:100%;overflow:hidden}
-    .canvas img{display:block;width:100%;height:100%;object-fit:fill}
-    .canvas svg{position:absolute;top:0;left:0;width:100%;height:100%}
-    .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;border-top:1px solid #ddd;padding-top:14px}
-    .li{display:flex;align-items:center;gap:6px;font-size:10pt}
-    .lc{width:12px;height:12px;border-radius:2px;flex-shrink:0}
-    @media print{body{padding:8px}@page{margin:1cm}}
+    html,body{height:100%}
+    body{padding:10px 14px;font-family:-apple-system,Helvetica,sans-serif;color:#111;background:#fff;display:flex;flex-direction:column;height:100vh}
+    h1{font-size:14pt;margin-bottom:2px}
+    .sub{font-size:8.5pt;color:#666;margin-bottom:4px}
+    .stats{display:flex;align-items:center;gap:8px;font-size:8.5pt;color:#444;margin-bottom:6px;padding:3px 8px;background:#f4f4f4;border-radius:3px;flex-shrink:0}
+    .sep{color:#bbb}.warn strong{color:#c00}
+    .canvas{position:relative;flex:1;min-height:0;overflow:hidden}
+    .canvas img{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}
+    .canvas svg{position:absolute;inset:0;width:100%;height:100%}
+    .legend{display:flex;flex-wrap:wrap;gap:6px 14px;padding-top:7px;border-top:1px solid #ddd;margin-top:7px;flex-shrink:0}
+    .li{display:flex;align-items:center;gap:5px;font-size:8.5pt}
+    .lc{width:13px;height:13px;border-radius:2px;flex-shrink:0}
+    .tn{font-weight:600}
+    .cnt{color:#888;font-size:7.5pt}
+    @media print{html,body{height:100%}@page{margin:0.8cm;size:auto}body{padding:8px 10px}}
   </style>
 </head><body>
   <h1>${activeFloor.name}</h1>
   ${subtitle ? `<div class="sub">${subtitle}</div>` : ""}
-  <div class="canvas" style="aspect-ratio:${ar}">
+  ${statsHtml}
+  <div class="canvas">
     ${imgSrc ? `<img src="${imgSrc}" />` : ""}
     ${svgHtml}
   </div>
