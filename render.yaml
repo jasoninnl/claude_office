@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: claude-office
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /data/office.db
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: PYTHON_VERSION
+        value: 3.11.0

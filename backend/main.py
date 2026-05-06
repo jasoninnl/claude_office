@@ -22,8 +22,8 @@ from optimizer import simulated_annealing, score_allocation
 
 Base.metadata.create_all(bind=engine)
 
-UPLOAD_DIR = Path(__file__).parent / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", Path(__file__).parent / "uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Office Staff Allocation Optimizer")
 

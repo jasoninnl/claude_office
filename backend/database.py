@@ -1,7 +1,9 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATABASE_URL = "sqlite:///./office.db"
+_db_path = os.environ.get("DATABASE_PATH", "./office.db")
+DATABASE_URL = f"sqlite:///{_db_path}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
