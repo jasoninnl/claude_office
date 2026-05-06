@@ -130,6 +130,7 @@ class FloorElementPatch(BaseModel):
     ny: Optional[float] = None
     nw: Optional[float] = None
     nh: Optional[float] = None
+    scenario_id: Optional[int] = None  # when set, team changes go to ScenarioElementAssignment
 
 
 class FloorElementCreate(BaseModel):
@@ -144,6 +145,7 @@ class FloorElementCreate(BaseModel):
 class BulkAssignRequest(BaseModel):
     team_id: Optional[int] = None
     element_ids: List[int]
+    scenario_id: Optional[int] = None
 
 
 class AutoAssignRequest(BaseModel):

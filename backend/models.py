@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, JSON, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -107,3 +107,23 @@ class FloorElement(Base):
 
     floor = relationship("Floor", back_populates="elements")
     team = relationship("Team", back_populates="floor_elements")
+    scenario_assignments = relationship(
+        "ScenarioElementAssignment", back_populates="element", cascade="all, delete-orphan"
+    )
+
+
+class ScenarioElementAssignment(Base):
+    """Per-scenario team assignment for a FloorElement (desk or office)."""
+    __tablename__ = "scenario_element_assignments"
+
+    id = Column(Integer, primary_key=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    element_id = Column(Integer, ForeignKey("floor_elements.id"), nullable=False)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    is_lead_office = Column(Boolean, default=False)
+
+    __table_args__ = (UniqueConstraint("scenario_id", "element_id", name="uq_scenario_element"),)
+
+    scenario = relationship("Scenario")
+    element = relationship("FloorElement", back_populates="scenario_assignments")
+    team = relationship("Team")

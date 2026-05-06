@@ -47,8 +47,12 @@ export const deleteFloorPdf = (floorId: number) =>
   req<Floor>(`/floors/${floorId}/pdf`, { method: "DELETE" });
 
 // ── Floor elements ────────────────────────────────────────────────────────────
-export const getFloorElements = (floorId: number) =>
-  req<FloorElement[]>(`/floors/${floorId}/elements`);
+export const getFloorElements = (floorId: number, scenarioId?: number) => {
+  const url = scenarioId
+    ? `/floors/${floorId}/elements?scenario_id=${scenarioId}`
+    : `/floors/${floorId}/elements`;
+  return req<FloorElement[]>(url);
+};
 
 export const addFloorElement = (
   floorId: number,
@@ -57,7 +61,7 @@ export const addFloorElement = (
 
 export const patchFloorElement = (
   elementId: number,
-  data: { element_type?: string; team_id?: number | null; is_lead_office?: boolean; label?: string; nx?: number; ny?: number; nw?: number; nh?: number }
+  data: { element_type?: string; team_id?: number | null; is_lead_office?: boolean; label?: string; nx?: number; ny?: number; nw?: number; nh?: number; scenario_id?: number }
 ) => req<FloorElement>(`/floor-elements/${elementId}`, { method: "PATCH", body: JSON.stringify(data) });
 
 export const deleteFloorElement = (elementId: number) =>
@@ -66,11 +70,12 @@ export const deleteFloorElement = (elementId: number) =>
 export const bulkAssignElements = (
   floorId: number,
   elementIds: number[],
-  teamId: number | null
+  teamId: number | null,
+  scenarioId?: number
 ) =>
   req<FloorElement[]>(`/floors/${floorId}/elements/bulk-assign`, {
     method: "POST",
-    body: JSON.stringify({ team_id: teamId, element_ids: elementIds }),
+    body: JSON.stringify({ team_id: teamId, element_ids: elementIds, scenario_id: scenarioId }),
   });
 
 export const autoAssignFloor = (floorId: number, scenarioId: number) =>

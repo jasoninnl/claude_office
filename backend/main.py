@@ -9,7 +9,7 @@ import os
 import uuid
 
 from database import engine, get_db
-from models import Base, Floor, Team, Scenario, Allocation, FloorElement
+from models import Base, Floor, Team, Scenario, Allocation, FloorElement, ScenarioElementAssignment
 from schemas import (
     FloorCreate, FloorUpdate, FloorOut,
     TeamCreate, TeamUpdate, TeamOut,
@@ -70,17 +70,82 @@ def _sync_floor_counts(db: Session, floor_id: int):
         new_rooms.append({"name": name, "capacity": capacity_by_name.get(name, 0)})
     floor.meeting_rooms = new_rooms
 
-    # Sync allocation.desks_used for every scenario allocation on this floor
-    team_counts: dict = {}
-    for d in desks:
-        if d.team_id:
-            team_counts[d.team_id] = team_counts.get(d.team_id, 0) + 1
-
+    # Sync allocation.desks_used per scenario using ScenarioElementAssignment
+    desk_ids = [d.id for d in desks]
     allocs = db.query(Allocation).filter(Allocation.floor_id == floor_id).all()
     for alloc in allocs:
-        alloc.desks_used = team_counts.get(alloc.team_id, 0)
+        if not desk_ids:
+            alloc.desks_used = 0
+        else:
+            alloc.desks_used = db.query(ScenarioElementAssignment).filter(
+                ScenarioElementAssignment.scenario_id == alloc.scenario_id,
+                ScenarioElementAssignment.element_id.in_(desk_ids),
+                ScenarioElementAssignment.team_id == alloc.team_id,
+            ).count()
 
     db.commit()
+
+
+def _upsert_scenario_assignment(
+    db: Session, scenario_id: int, element_id: int,
+    team_id_set: bool, team_id: Optional[int], is_lead_office: Optional[bool],
+) -> None:
+    """Create or update a per-scenario element assignment."""
+    sa = (
+        db.query(ScenarioElementAssignment)
+        .filter_by(scenario_id=scenario_id, element_id=element_id)
+        .first()
+    )
+    if sa:
+        if team_id_set:
+            sa.team_id = team_id
+        if is_lead_office is not None:
+            sa.is_lead_office = is_lead_office
+    else:
+        db.add(ScenarioElementAssignment(
+            scenario_id=scenario_id,
+            element_id=element_id,
+            team_id=team_id if team_id_set else None,
+            is_lead_office=is_lead_office or False,
+        ))
+
+
+def _overlay_scenario_assignments(
+    db: Session, elements: list, scenario_id: Optional[int]
+) -> list:
+    """Overlay per-scenario team assignments onto FloorElement objects in-memory.
+
+    Because autoflush=False and no commit is issued in read endpoints, these
+    in-memory mutations are never persisted to the database.
+    """
+    if not scenario_id or not elements:
+        return elements
+
+    element_ids = [el.id for el in elements]
+    assign_map: dict = {}
+    for a in (
+        db.query(ScenarioElementAssignment)
+        .options(selectinload(ScenarioElementAssignment.team))
+        .filter(
+            ScenarioElementAssignment.scenario_id == scenario_id,
+            ScenarioElementAssignment.element_id.in_(element_ids),
+        )
+        .all()
+    ):
+        assign_map[a.element_id] = a
+
+    for el in elements:
+        if el.id in assign_map:
+            a = assign_map[el.id]
+            el.team_id = a.team_id
+            el.is_lead_office = a.is_lead_office
+            el.team = a.team
+        else:
+            el.team_id = None
+            el.is_lead_office = False
+            el.team = None
+
+    return elements
 
 
 # ── Floors ──────────────────────────────────────────────────────────────────
@@ -254,6 +319,7 @@ def delete_floor_pdf(floor_id: int, db: Session = Depends(get_db)):
 def list_elements(
     floor_id: int,
     element_type: Optional[str] = None,
+    scenario_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(FloorElement).options(
@@ -261,7 +327,8 @@ def list_elements(
     ).filter(FloorElement.floor_id == floor_id)
     if element_type:
         q = q.filter(FloorElement.element_type == element_type)
-    return q.order_by(FloorElement.y, FloorElement.x).all()
+    elements = q.order_by(FloorElement.y, FloorElement.x).all()
+    return _overlay_scenario_assignments(db, elements, scenario_id)
 
 
 @app.post("/floors/{floor_id}/elements", response_model=FloorElementOut)
@@ -300,14 +367,10 @@ def patch_element(
     el = db.get(FloorElement, element_id)
     if not el:
         raise HTTPException(404, "Element not found")
+
+    # Geometry / type / label — always on FloorElement (scenario-agnostic)
     if body.element_type is not None:
         el.element_type = body.element_type
-    if body.team_id is not None:
-        el.team_id = body.team_id
-    elif "team_id" in body.model_fields_set:
-        el.team_id = None
-    if body.is_lead_office is not None:
-        el.is_lead_office = body.is_lead_office
     if body.label is not None:
         el.label = body.label
     floor_id = el.floor_id
@@ -315,20 +378,37 @@ def patch_element(
     pw = floor.pdf_page_width if floor else 841
     ph = floor.pdf_page_height if floor else 595
     if body.nx is not None:
-        el.nx = body.nx
-        el.x = body.nx * pw
+        el.nx = body.nx; el.x = body.nx * pw
     if body.ny is not None:
-        el.ny = body.ny
-        el.y = body.ny * ph
+        el.ny = body.ny; el.y = body.ny * ph
     if body.nw is not None:
-        el.nw = body.nw
-        el.w = body.nw * pw
+        el.nw = body.nw; el.w = body.nw * pw
     if body.nh is not None:
-        el.nh = body.nh
-        el.h = body.nh * ph
+        el.nh = body.nh; el.h = body.nh * ph
+
+    # Team assignment — scenario-specific when scenario_id provided
+    team_id_in_request = "team_id" in body.model_fields_set
+    if body.scenario_id and (team_id_in_request or body.is_lead_office is not None):
+        _upsert_scenario_assignment(
+            db, body.scenario_id, element_id,
+            team_id_set=team_id_in_request,
+            team_id=body.team_id,
+            is_lead_office=body.is_lead_office,
+        )
+    else:
+        if body.team_id is not None:
+            el.team_id = body.team_id
+        elif team_id_in_request:
+            el.team_id = None
+        if body.is_lead_office is not None:
+            el.is_lead_office = body.is_lead_office
+
     db.commit()
     _sync_floor_counts(db, floor_id)
-    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == element_id).first()
+
+    base = db.query(FloorElement).options(selectinload(FloorElement.team)).filter(FloorElement.id == element_id).first()
+    result = _overlay_scenario_assignments(db, [base], body.scenario_id)
+    return result[0]
 
 
 @app.delete("/floor-elements/{element_id}")
@@ -353,15 +433,24 @@ def bulk_assign(
         FloorElement.floor_id == floor_id,
         FloorElement.id.in_(body.element_ids),
     ).all()
-    for el in elements:
-        el.team_id = body.team_id
-        if body.team_id is None:
-            el.is_lead_office = False
+    if body.scenario_id:
+        for el in elements:
+            _upsert_scenario_assignment(
+                db, body.scenario_id, el.id,
+                team_id_set=True, team_id=body.team_id,
+                is_lead_office=False if body.team_id is None else None,
+            )
+    else:
+        for el in elements:
+            el.team_id = body.team_id
+            if body.team_id is None:
+                el.is_lead_office = False
     db.commit()
     _sync_floor_counts(db, floor_id)
-    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
+    refreshed = db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
         FloorElement.id.in_(body.element_ids)
     ).all()
+    return _overlay_scenario_assignments(db, refreshed, body.scenario_id)
 
 
 @app.post("/floors/{floor_id}/auto-assign", response_model=List[FloorElementOut])
@@ -393,13 +482,33 @@ def auto_assign_floor(
         FloorElement.element_type == "office",
     ).all()
 
+    # Save original FloorElement state (auto_assign mutates these in-memory)
+    orig_state = {el.id: {"team_id": el.team_id, "is_lead_office": el.is_lead_office}
+                  for el in desks + offices}
+
     auto_assign(desks, offices, allocs)
+
+    # Write results to ScenarioElementAssignment (scenario-specific)
+    for el in desks + offices:
+        _upsert_scenario_assignment(
+            db, body.scenario_id, el.id,
+            team_id_set=True, team_id=el.team_id,
+            is_lead_office=el.is_lead_office,
+        )
+
+    # Restore FloorElement.team_id/is_lead_office so they aren't persisted globally.
+    # Label changes (lead office names) are kept as they're display metadata.
+    for el in desks + offices:
+        el.team_id = orig_state[el.id]["team_id"]
+        el.is_lead_office = orig_state[el.id]["is_lead_office"]
+
     db.commit()
     _sync_floor_counts(db, floor_id)
 
-    return db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
+    all_elements = db.query(FloorElement).options(selectinload(FloorElement.team)).filter(
         FloorElement.floor_id == floor_id
     ).order_by(FloorElement.y, FloorElement.x).all()
+    return _overlay_scenario_assignments(db, all_elements, body.scenario_id)
 
 
 # ── Teams ────────────────────────────────────────────────────────────────────
@@ -564,6 +673,19 @@ def duplicate_scenario(scenario_id: int, db: Session = Depends(get_db)):
             floor_id=alloc.floor_id,
             desks_used=alloc.desks_used,
         ))
+
+    # Copy per-element assignments so the duplicate retains the same desk layout
+    src_assignments = db.query(ScenarioElementAssignment).filter(
+        ScenarioElementAssignment.scenario_id == scenario_id
+    ).all()
+    for a in src_assignments:
+        db.add(ScenarioElementAssignment(
+            scenario_id=copy.id,
+            element_id=a.element_id,
+            team_id=a.team_id,
+            is_lead_office=a.is_lead_office,
+        ))
+
     db.commit()
     _rescore_scenario(db, copy.id)
     return _load_scenario(db, copy.id)

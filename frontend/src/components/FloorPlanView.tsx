@@ -35,12 +35,12 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
   const loadElements = useCallback(async (floorId: number) => {
     setLoadingElements(true);
     try {
-      const data = await api.getFloorElements(floorId);
+      const data = await api.getFloorElements(floorId, scenario?.id ?? undefined);
       setElements(data);
     } finally {
       setLoadingElements(false);
     }
-  }, []);
+  }, [scenario?.id]);
 
   useEffect(() => {
     if (activeFloor?.pdf_path) {
@@ -357,6 +357,7 @@ export default function FloorPlanView({ scenario, floors, teams, onFloorChange, 
                   floor={activeFloor}
                   elements={elements}
                   teams={teams}
+                  scenario={scenario}
                   drawMode={drawMode}
                   onDrawModeChange={setDrawMode}
                   onElementsChange={() => { loadElements(activeFloor.id); onFloorChange(); onScenarioChange(); }}

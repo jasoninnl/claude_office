@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { X, Crown, RotateCcw, RotateCw } from "lucide-react";
-import type { Floor, FloorElement, Team } from "../types";
+import type { Floor, FloorElement, Team, Scenario } from "../types";
 import * as api from "../api";
 
 type DrawMode = "none" | "desk" | "office" | "meeting_room";
@@ -10,6 +10,7 @@ interface Props {
   floor: Floor;
   elements: FloorElement[];
   teams: Team[];
+  scenario?: Scenario | null;
   onElementsChange: () => void;
   drawMode: DrawMode;
   onDrawModeChange: (m: DrawMode) => void;
@@ -35,7 +36,7 @@ function teamColor(teamId: number | null, teams: Team[], alpha: number): string 
 const MEETING_ROOM_COLOR = "rgba(20,184,166,";
 
 export default function PdfFloorPlanCanvas({
-  floor, elements, teams, onElementsChange, drawMode, onDrawModeChange,
+  floor, elements, teams, scenario, onElementsChange, drawMode, onDrawModeChange,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -290,6 +291,7 @@ export default function PdfFloorPlanCanvas({
   const assignSelected = async (teamId: number | null) => {
     if (!selected.size) return;
     setSaving(true);
+    const scenarioId = scenario?.id;
     try {
       const elementIds = [...selected];
       const prevStates = elementIds.map((id) => {
@@ -298,14 +300,14 @@ export default function PdfFloorPlanCanvas({
       });
       const newTeamId = teamId;
       const doAssign = async () => {
-        await api.bulkAssignElements(floor.id, elementIds, newTeamId);
+        await api.bulkAssignElements(floor.id, elementIds, newTeamId, scenarioId);
         onChangeRef.current();
         setPopover(null);
         setSelected(new Set());
       };
       const doRestore = async () => {
         await Promise.all(elementIds.map((id, i) =>
-          api.patchFloorElement(id, { team_id: prevStates[i].team_id, is_lead_office: prevStates[i].is_lead_office })
+          api.patchFloorElement(id, { team_id: prevStates[i].team_id, is_lead_office: prevStates[i].is_lead_office, scenario_id: scenarioId })
         ));
         onChangeRef.current();
       };
