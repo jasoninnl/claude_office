@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Building2, Users, LayoutGrid, GitCompare, RefreshCw, Map } from "lucide-react";
+import { Building2, Users, LayoutGrid, GitCompare, RefreshCw, Map, LogOut } from "lucide-react";
 import type { Floor, Team, Scenario, Tab } from "./types";
 import * as api from "./api";
 import FloorManager from "./components/FloorManager";
@@ -7,6 +7,7 @@ import TeamManager from "./components/TeamManager";
 import ScenarioManager from "./components/ScenarioManager";
 import CompareView from "./components/CompareView";
 import FloorPlanView from "./components/FloorPlanView";
+import LoginPage from "./components/LoginPage";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "scenarios", label: "Scenarios", icon: <LayoutGrid size={16} /> },
@@ -17,6 +18,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(() => !!api.getToken());
   const [tab, setTab] = useState<Tab>("scenarios");
   const [floors, setFloors] = useState<Floor[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -25,6 +27,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  if (!isLoggedIn) {
+    return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+  }
 
   const load = useCallback(async () => {
     try {
@@ -110,12 +116,21 @@ export default function App() {
             )}
           </div>
 
-          <button
-            onClick={refresh}
-            className={`p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors ${refreshing ? "animate-spin" : ""}`}
-          >
-            <RefreshCw size={15} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={refresh}
+              className={`p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors ${refreshing ? "animate-spin" : ""}`}
+            >
+              <RefreshCw size={15} />
+            </button>
+            <button
+              onClick={api.logout}
+              className="p-1.5 text-gray-400 hover:text-white rounded-lg transition-colors"
+              title="Sign out"
+            >
+              <LogOut size={15} />
+            </button>
+          </div>
         </div>
 
         <div className="max-w-7xl mx-auto px-4 flex gap-1 pb-0">

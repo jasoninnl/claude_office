@@ -196,6 +196,12 @@ class OptimizeRequest(BaseModel):
     })
 
 
+# --- Auth ---
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 class ScoreBreakdown(BaseModel):
     total: float
     collaboration: float

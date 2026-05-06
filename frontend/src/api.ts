@@ -1,12 +1,45 @@
 import type { Floor, Team, Scenario, Allocation, FloorElement, PDFParseResult } from "./types";
 
 const BASE = "";
+const TOKEN_KEY = "auth_token";
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
+export const login = async (username: string, password: string) => {
+  const res = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Invalid credentials" }));
+    throw new Error(err.detail || "Login failed");
+  }
+  const data = await res.json();
+  localStorage.setItem(TOKEN_KEY, data.access_token);
+};
+
+export const logout = () => {
+  clearToken();
+  window.location.reload();
+};
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     ...opts,
   });
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error("Session expired");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || "Request failed");
@@ -26,7 +59,7 @@ export const deleteFloor = (id: number) =>
 export const uploadFloorImage = (floorId: number, file: File): Promise<Floor> => {
   const form = new FormData();
   form.append("file", file);
-  return fetch(`/floors/${floorId}/image`, { method: "POST", body: form }).then((r) => r.json());
+  return fetch(`/floors/${floorId}/image`, { method: "POST", headers: authHeaders(), body: form }).then((r) => r.json());
 };
 export const deleteFloorImage = (floorId: number) =>
   req<Floor>(`/floors/${floorId}/image`, { method: "DELETE" });
@@ -35,7 +68,7 @@ export const deleteFloorImage = (floorId: number) =>
 export const uploadFloorPdf = (floorId: number, file: File): Promise<PDFParseResult> => {
   const form = new FormData();
   form.append("file", file);
-  return fetch(`/floors/${floorId}/pdf`, { method: "POST", body: form }).then(async (r) => {
+  return fetch(`/floors/${floorId}/pdf`, { method: "POST", headers: authHeaders(), body: form }).then(async (r) => {
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(err.detail || "Upload failed");

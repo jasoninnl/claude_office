@@ -1,12 +1,17 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+import hashlib
 import os
+import secrets
 import uuid
+
+import jwt
 
 from database import engine, get_db
 from models import Base, Floor, Team, Scenario, Allocation, FloorElement, ScenarioElementAssignment
@@ -16,7 +21,7 @@ from schemas import (
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
     AllocationItem, AllocationOut, AllocationPositionUpdate, OptimizeRequest,
     FloorElementOut, FloorElementPatch, FloorElementCreate,
-    BulkAssignRequest, AutoAssignRequest, PDFParseResult,
+    BulkAssignRequest, AutoAssignRequest, PDFParseResult, LoginRequest,
 )
 from optimizer import simulated_annealing, score_allocation
 
@@ -24,6 +29,23 @@ Base.metadata.create_all(bind=engine)
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", Path(__file__).parent / "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Auth config ──────────────────────────────────────────────────────────────
+APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+# Derive a stable secret from the password so tokens survive restarts.
+# Set SECRET_KEY explicitly in production for best security.
+_SECRET_KEY = os.environ.get("SECRET_KEY") or hashlib.sha256(
+    (APP_PASSWORD or secrets.token_hex(32)).encode()
+).hexdigest()
+_ALGORITHM = "HS256"
+_TOKEN_DAYS = 30
+
+# API path prefixes that require a valid token
+_PROTECTED = (
+    "/floors", "/teams", "/scenarios", "/allocations",
+    "/optimize", "/floor-elements",
+)
 
 app = FastAPI(title="Office Staff Allocation Optimizer")
 
@@ -38,6 +60,42 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+
+
+# ── Auth middleware & login endpoint ─────────────────────────────────────────
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not any(request.url.path.startswith(p) for p in _PROTECTED):
+        return await call_next(request)
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    try:
+        payload = jwt.decode(auth[7:], _SECRET_KEY, algorithms=[_ALGORITHM])
+        if payload.get("sub") != APP_USERNAME:
+            raise jwt.InvalidTokenError()
+    except jwt.InvalidTokenError:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+    return await call_next(request)
+
+
+@app.post("/auth/login")
+def login(body: LoginRequest):
+    if not APP_PASSWORD:
+        raise HTTPException(500, "APP_PASSWORD environment variable is not set")
+    ok = (
+        secrets.compare_digest(body.username, APP_USERNAME)
+        and secrets.compare_digest(body.password, APP_PASSWORD)
+    )
+    if not ok:
+        raise HTTPException(401, "Invalid username or password")
+    token = jwt.encode(
+        {"sub": APP_USERNAME, "exp": datetime.now(timezone.utc) + timedelta(days=_TOKEN_DAYS)},
+        _SECRET_KEY,
+        algorithm=_ALGORITHM,
+    )
+    return {"access_token": token, "token_type": "bearer"}
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
