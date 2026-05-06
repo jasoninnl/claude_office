@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { X, Crown } from "lucide-react";
+import { X, Crown, RotateCcw, RotateCw } from "lucide-react";
 import type { Floor, FloorElement, Team } from "../types";
 import * as api from "../api";
 
@@ -54,6 +54,15 @@ export default function PdfFloorPlanCanvas({
   const draggingRef = useRef<typeof dragging>(null);
   const dragMovedRef = useRef(false);
 
+  type HistoryEntry = { undo: () => Promise<void>; redo: () => Promise<void> };
+  const undoStack = useRef<HistoryEntry[]>([]);
+  const redoStack = useRef<HistoryEntry[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  // Always up-to-date ref so closures in undo/redo entries don't go stale
+  const onChangeRef = useRef(onElementsChange);
+  onChangeRef.current = onElementsChange;
+
   const desks = elements.filter((e) => e.element_type === "desk");
   const offices = elements.filter((e) => e.element_type === "office");
   const meetingRooms = elements.filter((e) => e.element_type === "meeting_room");
@@ -99,6 +108,45 @@ export default function PdfFloorPlanCanvas({
     }
     return result;
   }, [desks]);
+
+  const pushHistory = useCallback((entry: HistoryEntry) => {
+    undoStack.current.push(entry);
+    redoStack.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    const entry = undoStack.current.pop();
+    if (!entry) return;
+    await entry.undo();
+    redoStack.current.push(entry);
+    setCanUndo(undoStack.current.length > 0);
+    setCanRedo(true);
+  }, []);
+
+  const handleRedo = useCallback(async () => {
+    const entry = redoStack.current.pop();
+    if (!entry) return;
+    await entry.redo();
+    undoStack.current.push(entry);
+    setCanUndo(true);
+    setCanRedo(redoStack.current.length > 0);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleUndo, handleRedo]);
 
   const handleElementMouseDown = useCallback((e: React.MouseEvent, el: FloorElement) => {
     if (e.shiftKey || drawMode !== "none") return;
@@ -159,8 +207,18 @@ export default function PdfFloorPlanCanvas({
     }
     setSaving(true);
     try {
-      await api.addFloorElement(floor.id, { element_type: drawMode, nx: finalNx, ny: finalNy, nw, nh });
-      onElementsChange();
+      const params = { element_type: drawMode, nx: finalNx, ny: finalNy, nw, nh, label: "" };
+      let addedId: number | null = null;
+      const doAdd = async () => {
+        const el = await api.addFloorElement(floor.id, params);
+        addedId = el.id;
+        onChangeRef.current();
+      };
+      const doDelete = async () => {
+        if (addedId != null) { await api.deleteFloorElement(addedId); onChangeRef.current(); }
+      };
+      await doAdd();
+      pushHistory({ undo: doDelete, redo: doAdd });
     } finally {
       setSaving(false);
     }
@@ -210,7 +268,16 @@ export default function PdfFloorPlanCanvas({
       // Drag commit
       const d = draggingRef.current;
       if (d && dragMovedRef.current) {
-        api.patchFloorElement(d.id, { nx: d.nx, ny: d.ny }).then(() => onElementsChange());
+        const elementId = d.id;
+        const origNx = d.origNx, origNy = d.origNy;
+        const newNx = d.nx, newNy = d.ny;
+        api.patchFloorElement(elementId, { nx: newNx, ny: newNy }).then(() => {
+          onChangeRef.current();
+          pushHistory({
+            undo: async () => { await api.patchFloorElement(elementId, { nx: origNx, ny: origNy }); onChangeRef.current(); },
+            redo: async () => { await api.patchFloorElement(elementId, { nx: newNx, ny: newNy }); onChangeRef.current(); },
+          });
+        });
       }
       draggingRef.current = null;
       setDragging(null);
@@ -218,16 +285,32 @@ export default function PdfFloorPlanCanvas({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [elements, lasso, toNorm, onElementsChange]);
+  }, [elements, lasso, toNorm, onElementsChange, pushHistory]);
 
   const assignSelected = async (teamId: number | null) => {
     if (!selected.size) return;
     setSaving(true);
     try {
-      await api.bulkAssignElements(floor.id, [...selected], teamId);
-      onElementsChange();
-      setPopover(null);
-      setSelected(new Set());
+      const elementIds = [...selected];
+      const prevStates = elementIds.map((id) => {
+        const el = elements.find((e) => e.id === id);
+        return { team_id: el?.team_id ?? null, is_lead_office: el?.is_lead_office ?? false };
+      });
+      const newTeamId = teamId;
+      const doAssign = async () => {
+        await api.bulkAssignElements(floor.id, elementIds, newTeamId);
+        onChangeRef.current();
+        setPopover(null);
+        setSelected(new Set());
+      };
+      const doRestore = async () => {
+        await Promise.all(elementIds.map((id, i) =>
+          api.patchFloorElement(id, { team_id: prevStates[i].team_id, is_lead_office: prevStates[i].is_lead_office })
+        ));
+        onChangeRef.current();
+      };
+      await doAssign();
+      pushHistory({ undo: doRestore, redo: doAssign });
     } finally {
       setSaving(false);
     }
@@ -237,20 +320,47 @@ export default function PdfFloorPlanCanvas({
     if (!selected.size) return;
     setSaving(true);
     try {
-      await Promise.all([...selected].map((id) => api.deleteFloorElement(id)));
-      onElementsChange();
-      setSelected(new Set());
+      const toDelete = elements.filter((e) => selected.has(e.id));
+      const snapshots = toDelete.map((el) => ({
+        element_type: el.element_type, nx: el.nx, ny: el.ny, nw: el.nw, nh: el.nh, label: el.label,
+      }));
+      const currentIds = toDelete.map((el) => el.id);
+      const doDelete = async () => {
+        await Promise.all(currentIds.map((id) => api.deleteFloorElement(id)));
+        onChangeRef.current();
+        setSelected(new Set());
+      };
+      const doAdd = async () => {
+        const added = await Promise.all(snapshots.map((s) => api.addFloorElement(floor.id, s)));
+        added.forEach((el, i) => { currentIds[i] = el.id; });
+        onChangeRef.current();
+      };
+      await doDelete();
+      pushHistory({ undo: doAdd, redo: doDelete });
     } finally {
       setSaving(false);
     }
   };
 
   const deleteElement = async (id: number) => {
+    const el = elements.find((e) => e.id === id);
+    if (!el) return;
     setSaving(true);
     try {
-      await api.deleteFloorElement(id);
-      onElementsChange();
-      setPopover(null);
+      const snapshot = { element_type: el.element_type, nx: el.nx, ny: el.ny, nw: el.nw, nh: el.nh, label: el.label };
+      let currentId = id;
+      const doDelete = async () => {
+        await api.deleteFloorElement(currentId);
+        onChangeRef.current();
+        setPopover(null);
+      };
+      const doAdd = async () => {
+        const added = await api.addFloorElement(floor.id, snapshot);
+        currentId = added.id;
+        onChangeRef.current();
+      };
+      await doDelete();
+      pushHistory({ undo: doAdd, redo: doDelete });
     } finally {
       setSaving(false);
     }
@@ -261,15 +371,20 @@ export default function PdfFloorPlanCanvas({
     if (!el) return;
     const pw = floor.pdf_page_width || 842;
     const ph = floor.pdf_page_height || 595;
-    // Swap physical pixel dimensions, then convert back to normalised coords
     const w_px = el.nw * pw, h_px = el.nh * ph;
     const nw = h_px / pw, nh = w_px / ph;
     const cx = el.nx + el.nw / 2, cy = el.ny + el.nh / 2;
+    const origNx = el.nx, origNy = el.ny, origNw = el.nw, origNh = el.nh;
+    const newNx = cx - nw / 2, newNy = cy - nh / 2;
     setSaving(true);
     try {
-      await api.patchFloorElement(id, { nx: cx - nw / 2, ny: cy - nh / 2, nw, nh });
-      onElementsChange();
+      await api.patchFloorElement(id, { nx: newNx, ny: newNy, nw, nh });
+      onChangeRef.current();
       setPopover(null);
+      pushHistory({
+        undo: async () => { await api.patchFloorElement(id, { nx: origNx, ny: origNy, nw: origNw, nh: origNh }); onChangeRef.current(); },
+        redo: async () => { await api.patchFloorElement(id, { nx: newNx, ny: newNy, nw, nh }); onChangeRef.current(); },
+      });
     } finally {
       setSaving(false);
     }
@@ -313,6 +428,24 @@ export default function PdfFloorPlanCanvas({
         )}
         {selected.size > 0 && <span className="text-indigo-400 font-medium">{selected.size} selected</span>}
         {saving && <span className="text-gray-400 animate-pulse">Saving…</span>}
+        <div className="flex items-center gap-0.5 border-l border-gray-700 pl-2">
+          <button
+            onClick={handleUndo}
+            disabled={!canUndo}
+            className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-25 disabled:cursor-not-allowed"
+            title="Undo (Ctrl+Z)"
+          >
+            <RotateCcw size={13} />
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={!canRedo}
+            className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white disabled:opacity-25 disabled:cursor-not-allowed"
+            title="Redo (Ctrl+Y)"
+          >
+            <RotateCw size={13} />
+          </button>
+        </div>
         {drawMode === "desk" && (
           <button
             onClick={() => setDeskOrientation((o) => o === "landscape" ? "portrait" : "landscape")}

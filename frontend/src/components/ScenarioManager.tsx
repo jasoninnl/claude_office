@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Copy, Trash2, Star, ChevronDown, ChevronRight, Zap, Pencil, Check, X } from "lucide-react";
+import { Plus, Copy, Trash2, Star, ChevronDown, ChevronRight, Zap, Pencil, Check, X, Download } from "lucide-react";
 import type { Scenario, Floor, Team } from "../types";
 import * as api from "../api";
 import ScenarioView from "./ScenarioView";
@@ -98,6 +98,26 @@ export default function ScenarioManager({ scenarios, floors, teams, activeScenar
     onScenarioChange();
   };
 
+  const exportCsv = (s: Scenario) => {
+    const header = ["Team", "Department", "Headcount", "Floor", "Level", "Desks Used", "Utilization %"];
+    const rows = s.allocations.map((a) => {
+      const util = a.floor.total_desks > 0
+        ? Math.round((a.desks_used / a.floor.total_desks) * 100)
+        : 0;
+      return [a.team.name, a.team.department, a.team.headcount, a.floor.name, a.floor.level, a.desks_used, `${util}%`];
+    });
+    const csv = [header, ...rows]
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${s.name.replace(/[^a-z0-9]/gi, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const scoreColor = (score: number | null) => {
     if (score === null) return "text-gray-500";
     if (score >= 50) return "text-emerald-400";
@@ -159,6 +179,15 @@ export default function ScenarioManager({ scenarios, floors, teams, activeScenar
           <Plus size={14} /> New
         </button>
 
+        {active && (
+          <button
+            onClick={() => exportCsv(active)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-lg text-sm transition-colors"
+            title="Export current scenario as CSV"
+          >
+            <Download size={14} /> Export CSV
+          </button>
+        )}
         <button
           onClick={() => setShowOptimizer((v) => !v)}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-900 hover:bg-indigo-800 text-indigo-300 rounded-lg text-sm font-medium transition-colors ml-auto"
